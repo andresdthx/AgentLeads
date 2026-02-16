@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version:*)",
+      "Bash(npx supabase:*)",
+      "Bash(export SUPABASE_ACCESS_TOKEN:*)",
+      "Bash(git checkout:*)",
+      "Bash(deno task:*)",
+      "Bash(npm install:*)"
+    ]
+  }
+}

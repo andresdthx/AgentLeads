@@ -1,0 +1,38 @@
+# Test files
+__tests__/
+*.test.ts
+*.spec.ts
+deno.json
+
+# Documentation
+README.md
+*.md
+
+# Coverage reports
+coverage/
+*.lcov
+
+# Development files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+.temp/
+.tmp/
+
+# Backup files
+*.bak
+*.backup
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Lock files
+deno.lock

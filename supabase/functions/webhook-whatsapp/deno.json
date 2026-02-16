@@ -1,0 +1,26 @@
+{
+  "tasks": {
+    "test": "deno test --allow-env --allow-net",
+    "test:watch": "deno test --allow-env --allow-net --watch",
+    "test:coverage": "deno test --allow-env --allow-net --coverage=coverage",
+    "test:verbose": "deno test --allow-env --allow-net --",
+    "coverage": "deno coverage coverage --lcov > coverage.lcov"
+  },
+  "test": {
+    "include": ["__tests__/**/*.test.ts"],
+    "exclude": ["node_modules/", "dist/"]
+  },
+  "fmt": {
+    "options": {
+      "lineWidth": 100,
+      "indentWidth": 2,
+      "semiColons": true,
+      "singleQuote": false
+    }
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  }
+}

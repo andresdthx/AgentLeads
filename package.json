@@ -1,0 +1,27 @@
+{
+  "name": "agentsleads",
+  "version": "1.0.0",
+  "description": "WhatsApp Lead Qualification System with Supabase Edge Functions",
+  "type": "module",
+  "scripts": {
+    "dev": "npx supabase start",
+    "deploy": "npx supabase functions deploy webhook-whatsapp",
+    "deploy:prod": "npx supabase functions deploy webhook-whatsapp --project-ref pgwklddzkizicqigvipf",
+    "logs": "npx supabase functions logs webhook-whatsapp",
+    "test": "cd supabase/functions/webhook-whatsapp && deno task test",
+    "test:watch": "cd supabase/functions/webhook-whatsapp && deno task test:watch",
+    "link": "npx supabase link --project-ref pgwklddzkizicqigvipf"
+  },
+  "keywords": [
+    "supabase",
+    "edge-functions",
+    "whatsapp",
+    "lead-qualification",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "supabase": "^2.76.8"
+  }
+}
