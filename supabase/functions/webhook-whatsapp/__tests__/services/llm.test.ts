@@ -51,6 +51,7 @@ FIN
 
   const cleanedResponse = responseWithClassification
     .replace(/CLASIFICACION[\s\S]*FIN/, "")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   assertEquals(

@@ -2,7 +2,9 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Message } from "../types/index.ts";
-import { CONVERSATION_HISTORY_LIMIT } from "../config/prompts.ts";
+import { createLogger } from "../utils/logger.ts";
+
+const logger = createLogger("conversation");
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -16,7 +18,7 @@ export async function saveMessage(message: Message): Promise<void> {
   const { error } = await supabase.from("messages").insert(message);
 
   if (error) {
-    console.error("Error guardando mensaje:", error);
+    logger.error("Error guardando mensaje", { role: message.role, leadId: message.lead_id, error });
     throw error;
   }
 }
@@ -26,16 +28,16 @@ export async function saveMessage(message: Message): Promise<void> {
  */
 export async function getConversationHistory(
   leadId: string,
-  limit: number = CONVERSATION_HISTORY_LIMIT
+  limit: number = 10
 ): Promise<Message[]> {
   const { data: history } = await supabase
     .from("messages")
     .select("role, content")
     .eq("lead_id", leadId)
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
     .limit(limit);
 
-  return history || [];
+  return (history || []).reverse();
 }
 
 /**

@@ -10,6 +10,7 @@ Deno.test("Message Handler - Skip messages not from user", async () => {
   const payload: RequestPayload = {
     sent_by: "bot",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "Test message" },
     contact: { first_name: "Test" },
   };
@@ -26,6 +27,7 @@ Deno.test("Message Handler - Skip messages without text", async () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "" },
     contact: { first_name: "Test" },
   };
@@ -44,6 +46,7 @@ Deno.test("Message Handler - Skip messages without phone", async () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "",
+    channel_phone_number: "+0000000000",
     message: { text: "Hello" },
     contact: { first_name: "Test" },
   };
@@ -61,6 +64,7 @@ Deno.test("Message Handler - Process valid user message", async () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "Hello, I need help" },
     contact: { first_name: "John" },
   };
@@ -76,6 +80,7 @@ Deno.test("Message Handler - Extract phone and message correctly", () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "Test message" },
     contact: { first_name: "Jane" },
   };
@@ -91,6 +96,7 @@ Deno.test("Message Handler - Handle contact with first name", () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "Hello" },
     contact: { first_name: "Alice" },
   };
@@ -103,6 +109,7 @@ Deno.test("Message Handler - Handle contact without first name", () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "Hello" },
     contact: {},
   };
@@ -132,6 +139,7 @@ Deno.test("Message Handler - Validate payload structure", () => {
   const validPayload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: "Hello" },
     contact: { first_name: "Test" },
   };
@@ -139,6 +147,7 @@ Deno.test("Message Handler - Validate payload structure", () => {
   // Check all required fields exist
   assertExists(validPayload.sent_by);
   assertExists(validPayload.remote_phone_number);
+  assertExists(validPayload.channel_phone_number);
   assertExists(validPayload.message);
   assertExists(validPayload.message.text);
   assertExists(validPayload.contact);
@@ -175,6 +184,7 @@ Deno.test("Message Handler - Different phone number formats", () => {
     const payload: RequestPayload = {
       sent_by: "user",
       remote_phone_number: phone,
+      channel_phone_number: "+0000000000",
       message: { text: "Test" },
       contact: {},
     };
@@ -189,6 +199,7 @@ Deno.test("Message Handler - Long message handling", () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: longMessage },
     contact: {},
   };
@@ -202,6 +213,7 @@ Deno.test("Message Handler - Special characters in message", () => {
   const payload: RequestPayload = {
     sent_by: "user",
     remote_phone_number: "+1234567890",
+    channel_phone_number: "+0000000000",
     message: { text: specialMessage },
     contact: {},
   };

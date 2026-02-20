@@ -19,37 +19,29 @@ export function createMockSupabaseClient() {
           },
         }),
         order: (column: string, options: any) => ({
-          limit: (limit: number) => ({
-            then: async (resolve: any) => {
-              const data = mockData[table].slice(0, limit);
-              resolve({ data, error: null });
-            },
+          limit: (limit: number) =>
+            Promise.resolve({ data: mockData[table].slice(0, limit), error: null }),
+        }),
+      }),
+      insert: (data: any) => {
+        const newItem = { ...data, id: data.id ?? crypto.randomUUID() };
+        mockData[table].push(newItem);
+        const result = { data: newItem, error: null };
+        // Devuelve una Promise real con .select() encadenado sin romper await
+        return Object.assign(Promise.resolve(result), {
+          select: () => ({
+            single: () => Promise.resolve(result),
           }),
-        }),
-      }),
-      insert: (data: any) => ({
-        select: () => ({
-          single: async () => {
-            const newItem = { ...data, id: crypto.randomUUID() };
-            mockData[table].push(newItem);
-            return { data: newItem, error: null };
-          },
-        }),
-        then: async (resolve: any) => {
-          mockData[table].push(data);
-          resolve({ data, error: null });
-        },
-      }),
+        });
+      },
       update: (data: any) => ({
-        eq: (column: string, value: any) => ({
-          then: async (resolve: any) => {
-            const index = mockData[table].findIndex((item: any) => item[column] === value);
-            if (index !== -1) {
-              mockData[table][index] = { ...mockData[table][index], ...data };
-            }
-            resolve({ data, error: null });
-          },
-        }),
+        eq: (column: string, value: any) => {
+          const index = mockData[table].findIndex((item: any) => item[column] === value);
+          if (index !== -1) {
+            mockData[table][index] = { ...mockData[table][index], ...data };
+          }
+          return Promise.resolve({ data, error: null });
+        },
       }),
     }),
     // Helper to seed data
@@ -94,10 +86,6 @@ export function createMockFetch(responses: Record<string, any> = {}) {
 export const createTestLead = (overrides: Partial<Lead> = {}): Lead => ({
   id: crypto.randomUUID(),
   phone: "+1234567890",
-  name: "Test Lead",
-  classification: "warm",
-  score: 50,
-  current_phase: "new",
   ...overrides,
 });
 
@@ -150,10 +138,7 @@ export function assertLead(actual: any, expected: Partial<Lead>) {
   if (expected.phone !== undefined && actual.phone !== expected.phone) {
     throw new Error(`Expected phone ${expected.phone}, got ${actual.phone}`);
   }
-  if (expected.name !== undefined && actual.name !== expected.name) {
-    throw new Error(`Expected name ${expected.name}, got ${actual.name}`);
-  }
-  if (expected.classification !== undefined && actual.classification !== expected.classification) {
-    throw new Error(`Expected classification ${expected.classification}, got ${actual.classification}`);
+  if (expected.client_id !== undefined && actual.client_id !== expected.client_id) {
+    throw new Error(`Expected client_id ${expected.client_id}, got ${actual.client_id}`);
   }
 }

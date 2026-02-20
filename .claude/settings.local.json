@@ -6,7 +6,32 @@
       "Bash(export SUPABASE_ACCESS_TOKEN:*)",
       "Bash(git checkout:*)",
       "Bash(deno task:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(export:*)",
+      "Bash(ls:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 npx supabase functions deploy:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 npx supabase db push:*)",
+      "Bash(npx --yes deno@latest --version)",
+      "Bash(npx deno test:*)",
+      "Bash(dir:*)",
+      "Bash(cmd.exe /c \"dir /s /b \"\"c:\\\\Users\\\\andres.canchila_prag\\\\Documents\\\\personal_devs\\\\AgentsLeads\\\\supabase\\\\functions\\\\webhook-whatsapp\\\\__tests__\"\"\")",
+      "Bash(cmd.exe /c \"dir \"\"c:\\\\Users\\\\andres.canchila_prag\\\\Documents\\\\personal_devs\\\\AgentsLeads\\\\supabase\\\\functions\\\\webhook-whatsapp\"\" /s /b 2>&1\")",
+      "Bash(cmd.exe /c \"where deno 2>&1\")",
+      "Bash(cmd.exe /c \"deno --version 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-Command deno -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\Users\\\\andres.canchila_prag'' -Recurse -Filter ''deno.exe'' -ErrorAction SilentlyContinue | Select-Object FullName\")",
+      "Bash(DENO_BIN=\"/c/Users/andres.canchila_prag/AppData/Local/npm-cache/_npx/05b6ef7b13673c57/node_modules/@deno/win32-x64/deno.exe\":*)",
+      "Bash(\"$DENO_BIN\" task test)",
+      "Bash(\"$DENO_BIN\" check __tests__/helpers/mocks.ts __tests__/services/conversation.test.ts __tests__/services/lead.test.ts)",
+      "Bash(cmd.exe /c \"supabase --version 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-Command supabase -ErrorAction SilentlyContinue | Select-Object Source\")",
+      "Bash(SUPA_BIN=\"/c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads/node_modules/supabase/bin/supabase.exe\")",
+      "Bash(\"$SUPA_BIN\" --version)",
+      "Bash(\"$SUPA_BIN\" projects list)",
+      "Bash(SUPABASE_ACCESS_TOKEN=\"sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0\")",
+      "Bash(SUPABASE_ACCESS_TOKEN=\"$SUPABASE_ACCESS_TOKEN\" \"$SUPA_BIN\" projects list:*)"
     ]
   }
 }

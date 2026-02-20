@@ -3,6 +3,9 @@
 
 import type { RequestPayload } from "./types/index.ts";
 import { handleIncomingMessage } from "./handlers/message.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const logger = createLogger("index");
 
 /**
  * Main entry point for WhatsApp webhook
@@ -25,7 +28,7 @@ Deno.serve(async (req) => {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Error general:", error);
+    logger.error("Error general no manejado", { error: error instanceof Error ? error.message : String(error) });
     return new Response(
       JSON.stringify({
         ok: false,

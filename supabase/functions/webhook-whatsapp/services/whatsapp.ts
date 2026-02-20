@@ -1,5 +1,9 @@
 // WhatsApp service - handles sending messages via 2chat
 
+import { createLogger } from "../utils/logger.ts";
+
+const logger = createLogger("whatsapp");
+
 const TWOCHAT_API_KEY = Deno.env.get("TWOCHAT_API_KEY")!;
 const TWOCHAT_FROM = Deno.env.get("TWOCHAT_FROM_NUMBER")!;
 const WPP_ORQUESTER_PROVIDER_URL = Deno.env.get("WPP_ORQUESTER_PROVIDER_URL")!;
@@ -29,10 +33,11 @@ export async function sendWhatsAppMessage(
   );
 
   const data = await response.json();
-  console.log("Respuesta enviada:", JSON.stringify(data));
 
   if (!response.ok) {
-    console.error("Error enviando mensaje:", data);
+    logger.error("Error enviando mensaje WhatsApp", { to, status: response.status, data });
     throw new Error("Failed to send WhatsApp message");
   }
+
+  logger.info("Mensaje WhatsApp enviado", { to, status: response.status });
 }
