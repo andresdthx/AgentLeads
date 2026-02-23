@@ -31,7 +31,10 @@
       "Bash(\"$SUPA_BIN\" --version)",
       "Bash(\"$SUPA_BIN\" projects list)",
       "Bash(SUPABASE_ACCESS_TOKEN=\"sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0\")",
-      "Bash(SUPABASE_ACCESS_TOKEN=\"$SUPABASE_ACCESS_TOKEN\" \"$SUPA_BIN\" projects list:*)"
+      "Bash(SUPABASE_ACCESS_TOKEN=\"$SUPABASE_ACCESS_TOKEN\" \"$SUPA_BIN\" projects list:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 npx supabase:*)",
+      "Bash(curl:*)",
+      "Bash(node -e:*)"
     ]
   }
 }

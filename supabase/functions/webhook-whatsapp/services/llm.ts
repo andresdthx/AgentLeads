@@ -1,6 +1,6 @@
 // LLM service - handles AI conversation and classification
 
-import type { LLMMessage, Classification, Message, ClientConfig } from "../types/index.ts";
+import type { LLMMessage, Classification, OrderData, Message, ClientConfig } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("llm");
@@ -107,11 +107,33 @@ function parseClassification(response: string): Classification | null {
 }
 
 /**
- * Clean response by removing classification block
+ * Parse order data from LLM response.
+ * Detects a ```json ... ``` block containing "pedido_confirmado": true.
+ */
+function parseOrderData(response: string): OrderData | null {
+  const blockMatch = response.match(/```json\s*([\s\S]*?)```/);
+
+  if (!blockMatch) return null;
+
+  try {
+    const parsed = JSON.parse(blockMatch[1].trim());
+    if (parsed?.pedido_confirmado === true && Array.isArray(parsed?.items)) {
+      return parsed as OrderData;
+    }
+    return null;
+  } catch (e) {
+    logger.warn("Error parseando bloque de pedido", { error: e, raw: blockMatch[1] });
+    return null;
+  }
+}
+
+/**
+ * Clean response by removing classification block and order JSON block
  */
 function cleanResponse(response: string): string {
   return response
     .replace(/CLASIFICACION[\s\S]*FIN/, "")
+    .replace(/```json[\s\S]*?```/, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -124,7 +146,7 @@ export async function generateResponse(
   history: Message[],
   config: ClientConfig,
   inventorySection?: string
-): Promise<{ response: string; classification: Classification | null }> {
+): Promise<{ response: string; classification: Classification | null; orderData: OrderData | null }> {
   const systemPrompt = inventorySection
     ? `${config.system_prompt}\n\n${inventorySection}`
     : config.system_prompt;
@@ -133,10 +155,12 @@ export async function generateResponse(
   const llmResponse = await callLLM(messages, config);
 
   const classification = parseClassification(llmResponse);
+  const orderData = parseOrderData(llmResponse);
   const cleanedResponse = cleanResponse(llmResponse);
 
   return {
     response: cleanedResponse,
     classification,
+    orderData,
   };
 }

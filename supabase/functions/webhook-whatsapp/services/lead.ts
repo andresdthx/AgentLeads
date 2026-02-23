@@ -1,7 +1,7 @@
 // Lead service - handles lead creation and updates
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Lead, Classification, BotPausedReason } from "../types/index.ts";
+import type { Lead, Classification, OrderData, BotPausedReason } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("lead");
@@ -106,6 +106,29 @@ export async function updateLeadClassification(
     score: classification.score,
     reasoning: classification.reasoning,
   });
+}
+
+/**
+ * Guarda los datos del pedido confirmado en el lead.
+ */
+export async function saveOrderData(
+  leadId: string,
+  orderData: OrderData
+): Promise<void> {
+  const { error } = await supabase
+    .from("leads")
+    .update({
+      order_data: orderData,
+      order_confirmed_at: new Date().toISOString(),
+    })
+    .eq("id", leadId);
+
+  if (error) {
+    logger.error("Error guardando datos del pedido", { leadId, error });
+    throw error;
+  }
+
+  logger.info("Pedido confirmado guardado", { leadId, orderData });
 }
 
 /**

@@ -81,6 +81,22 @@ export async function clientHasCatalog(clientId: string): Promise<boolean> {
 }
 
 /**
+ * Construye el bloque de contexto de catálogo para inyectar en el system prompt.
+ * Usado cuando product_mode = 'catalog'.
+ * El LLM decide cuándo compartir el enlace según el historial de conversación.
+ */
+export function buildCatalogSection(catalogUrl: string): string {
+  return [
+    "--- CATÁLOGO DE PRODUCTOS ---",
+    `Enlace del catálogo: ${catalogUrl}`,
+    "Cuando el cliente pregunte por productos, precios o imágenes, comparte este enlace.",
+    "Después de compartirlo, pídele la referencia específica que le interesó para confirmar disponibilidad y precio.",
+    "Si ya compartiste el catálogo en este chat, no lo vuelvas a enviar — espera la referencia.",
+    "---",
+  ].join("\n");
+}
+
+/**
  * Formatea los productos en un bloque de texto estructurado para inyectar
  * en el system prompt del LLM.
  */
