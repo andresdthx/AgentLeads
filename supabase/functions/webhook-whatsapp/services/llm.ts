@@ -108,10 +108,10 @@ function parseClassification(response: string): Classification | null {
 
 /**
  * Parse order data from LLM response.
- * Detects a ```json ... ``` block containing "pedido_confirmado": true.
+ * Detects a PEDIDO_INICIO ... PEDIDO_FIN block containing "pedido_confirmado": true.
  */
 function parseOrderData(response: string): OrderData | null {
-  const blockMatch = response.match(/```json\s*([\s\S]*?)```/);
+  const blockMatch = response.match(/PEDIDO_INICIO\s*([\s\S]*?)\s*PEDIDO_FIN/);
 
   if (!blockMatch) return null;
 
@@ -132,8 +132,8 @@ function parseOrderData(response: string): OrderData | null {
  */
 function cleanResponse(response: string): string {
   return response
-    .replace(/CLASIFICACION[\s\S]*FIN/, "")
-    .replace(/```json[\s\S]*?```/, "")
+    .replace(/CLASIFICACION[\s\S]*?FIN/, "")
+    .replace(/PEDIDO_INICIO[\s\S]*?PEDIDO_FIN/, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

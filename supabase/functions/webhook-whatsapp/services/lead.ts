@@ -2,6 +2,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Lead, Classification, OrderData, BotPausedReason } from "../types/index.ts";
+import { saveHandoffNote } from "./conversation.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("lead");
@@ -84,14 +85,19 @@ export async function getOrCreateLead(
  */
 export async function updateLeadClassification(
   leadId: string,
-  classification: Classification
+  classification: Classification,
+  additionalExtracted?: Record<string, unknown>
 ): Promise<void> {
+  const extracted = {
+    ...classification.extracted,
+    ...(additionalExtracted ?? {}),
+  };
   const { error } = await supabase
     .from("leads")
     .update({
       classification: classification.classification,
       score: classification.score,
-      extracted_data: classification.extracted,
+      extracted_data: extracted,
     })
     .eq("id", leadId);
 
@@ -129,6 +135,29 @@ export async function saveOrderData(
   }
 
   logger.info("Pedido confirmado guardado", { leadId, orderData });
+}
+
+/**
+ * Reactiva el bot para un lead — el humano devuelve el control.
+ * Guarda una nota de contexto en el historial para que el LLM sepa que hubo una pausa.
+ */
+export async function resumeLead(leadId: string): Promise<void> {
+  const { error } = await supabase
+    .from("leads")
+    .update({
+      bot_paused: false,
+      bot_paused_reason: null,
+      resumed_at: new Date().toISOString(),
+    })
+    .eq("id", leadId);
+
+  if (error) {
+    logger.error("Error reactivando bot del lead", { leadId, error });
+    throw error;
+  }
+
+  await saveHandoffNote(leadId);
+  logger.info("Bot reactivado — nota de handoff guardada", { leadId });
 }
 
 /**

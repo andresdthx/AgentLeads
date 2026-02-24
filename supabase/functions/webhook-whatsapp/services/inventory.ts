@@ -88,7 +88,8 @@ export async function clientHasCatalog(clientId: string): Promise<boolean> {
 export function buildCatalogSection(catalogUrl: string): string {
   return [
     "--- CATÁLOGO DE PRODUCTOS ---",
-    `Enlace del catálogo: ${catalogUrl}`,
+    `URL del catálogo: ${catalogUrl}`,
+    `Cada vez que debas compartir el catálogo, usa exactamente esta URL: ${catalogUrl}`,
     "Cuando el cliente pregunte por productos, precios o imágenes, comparte este enlace.",
     "Después de compartirlo, pídele la referencia específica que le interesó para confirmar disponibilidad y precio.",
     "Si ya compartiste el catálogo en este chat, no lo vuelvas a enviar — espera la referencia.",

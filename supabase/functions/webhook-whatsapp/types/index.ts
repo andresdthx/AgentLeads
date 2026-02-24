@@ -62,6 +62,7 @@ export interface Lead {
   client_id?: string;
   bot_paused?: boolean;
   bot_paused_reason?: string;
+  resumed_at?: string | null;
 }
 
 export interface AgentPrompt {
@@ -164,7 +165,7 @@ export interface ClientProduct {
   is_active: boolean;
 }
 
-export type BotPausedReason = "no_catalog" | "out_of_stock" | "needs_images" | "transferred" | "order_confirmed";
+export type BotPausedReason = "no_catalog" | "out_of_stock" | "needs_images" | "transferred" | "order_confirmed" | "human_takeover";
 
 export interface OrderItem {
   producto: string | null;

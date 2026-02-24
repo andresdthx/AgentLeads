@@ -55,28 +55,52 @@ export async function handleIncomingMessage(
   // 2. Get or create lead with the correct client_id
   const lead = await getOrCreateLead(phone, client.id);
 
-  // 3. Si el bot está pausado, no procesar — humano en control
+  // 3. Modo observador — bot pausado
+  //    no_catalog: silencio total (falta configuración, nada que guardar)
+  //    resto de razones: guardar mensaje sin llamar al LLM ni responder,
+  //    para preservar el contexto cuando el humano devuelva el control.
   if (lead.bot_paused) {
-    logger.info("Bot pausado, mensaje ignorado por el agente", {
-      leadId: lead.id,
-      reason: lead.bot_paused_reason,
-    });
+    if (lead.bot_paused_reason !== "no_catalog") {
+      const observerContent =
+        incomingText ?? (incomingMedia ? `[${incomingMedia.type} recibido]` : "[mensaje]");
+      await saveUserMessage(lead.id, observerContent);
+      logger.info("Modo observador: mensaje guardado sin respuesta del bot", {
+        leadId: lead.id,
+        reason: lead.bot_paused_reason,
+      });
+    } else {
+      logger.info("Bot pausado por falta de catálogo, mensaje ignorado", {
+        leadId: lead.id,
+      });
+    }
     return { ok: true, skipped: true, reason: "bot_paused" };
   }
 
-  // 4. Resolver texto del mensaje — si es imagen/audio, llamar API correspondiente
+  // 4. Resolver texto del mensaje
+  //    Casos posibles: solo texto | solo imagen | texto + imagen | solo audio
   let incomingMessage: string;
-  if (incomingText) {
+
+  if (incomingText && incomingMedia?.type === "image") {
+    // Imagen con caption — describir la imagen y combinar con el texto del cliente
+    logger.info("Imagen con texto recibida, procesando con Vision API", { phone, url: incomingMedia.url });
+    const imageDescription = await describeProductImage(incomingMedia.url);
+    incomingMessage = `${incomingText}\n[Imagen adjunta: ${imageDescription}]`;
+    logger.info("Imagen con texto procesada", { phone, text: incomingText, description: imageDescription });
+
+  } else if (incomingText) {
     incomingMessage = incomingText;
+
   } else if (incomingMedia?.type === "image") {
     logger.info("Imagen recibida, procesando con Vision API", { phone, url: incomingMedia.url });
     incomingMessage = await describeProductImage(incomingMedia.url);
     logger.info("Imagen procesada", { phone, description: incomingMessage });
+
   } else if (incomingMedia?.type === "audio") {
     // "ptt" (push-to-talk) is normalized to "audio" by the adapter
     logger.info("Audio recibido, transcribiendo con Whisper", { phone, url: incomingMedia.url, mime: incomingMedia.mimeType });
     incomingMessage = await transcribeAudio(incomingMedia.url, incomingMedia.mimeType);
     logger.info("Audio transcrito", { phone, transcription: incomingMessage });
+
   } else {
     // Video, documento — no soportado aún
     logger.debug("Tipo de media no soportado, ignorando", { phone, type: incomingMedia?.type });
@@ -97,6 +121,19 @@ export async function handleIncomingMessage(
   // 6. Get client configuration
   const clientConfig = await getClientConfig(client.id);
 
+  // 6b. Modo catálogo: sustituir el placeholder [URL] en el system prompt con la
+  //     URL real del catálogo obtenida de la DB. Se hace aquí de forma determinista
+  //     para que el LLM nunca emita "[URL]" literalmente.
+  if (client.product_mode === "catalog" && client.catalog_url) {
+    clientConfig.system_prompt = clientConfig.system_prompt.replaceAll(
+      "[URL]",
+      client.catalog_url
+    );
+    logger.debug("Placeholder [URL] sustituido en system prompt", { catalogUrl: client.catalog_url });
+  } else if (client.product_mode === "catalog" && !client.catalog_url) {
+    logger.warn("Modo catálogo sin catalog_url configurada en la DB", { clientId: client.id });
+  }
+
   // 7. Save all messages in the batch to conversation history (in order)
   for (const msgText of batchMessages) {
     await saveUserMessage(lead.id, msgText);
@@ -113,6 +150,7 @@ export async function handleIncomingMessage(
 
   // 9. Contexto de productos — catálogo siempre presente; inventario solo si hay intent
   let inventorySection = "";
+  let productIntentData: Record<string, unknown> | undefined;
 
   if (client.product_mode === "catalog") {
     // 9a. Modo catálogo — inyectar URL en cada mensaje; el LLM decide cuándo compartirla
@@ -132,6 +170,16 @@ export async function handleIncomingMessage(
     logger.debug("Intent extraído", { intent });
 
     if (intent.has_product_intent) {
+      // Capturar datos del intent para persistir en extracted_data
+      productIntentData = {
+        product_intent: {
+          brand: intent.brand,
+          model: intent.model,
+          customer_type: intent.customer_type,
+          confidence: intent.confidence,
+        },
+      };
+
       const hasCatalog = await clientHasCatalog(client.id);
 
       if (!hasCatalog) {
@@ -179,7 +227,7 @@ export async function handleIncomingMessage(
 
   // 11. Update lead classification if present
   if (classification) {
-    await updateLeadClassification(lead.id, classification);
+    await updateLeadClassification(lead.id, classification, productIntentData);
     logger.info("Lead clasificado", {
       phone,
       leadId: lead.id,

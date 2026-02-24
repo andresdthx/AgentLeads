@@ -67,3 +67,16 @@ export async function saveAssistantMessage(
     content,
   });
 }
+
+/**
+ * Save a synthetic handoff note into conversation history.
+ * Called by resumeLead so the LLM has context when it takes over again.
+ */
+export async function saveHandoffNote(leadId: string): Promise<void> {
+  await saveMessage({
+    lead_id: leadId,
+    role: "assistant",
+    content:
+      "[NOTA INTERNA: El bot estuvo pausado mientras un asesor humano atendía esta conversación. Continúa de forma natural desde donde quedó el cliente.]",
+  });
+}
