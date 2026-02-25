@@ -2,6 +2,14 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Client, ClientConfig, LLMModelResolved } from "../types/index.ts";
+import { createLogger } from "../utils/logger.ts";
+
+const logger = createLogger("client");
+
+// Cache de configuración de clientes — persiste mientras la Edge Function esté caliente.
+// Evita N+1 queries (5 tablas con JOINs) por cada mensaje entrante.
+const CONFIG_CACHE = new Map<string, { config: ClientConfig; expiresAt: number }>();
+const CONFIG_TTL_MS = 5 * 60 * 1000; // 5 minutos
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -105,9 +113,18 @@ export async function getDefaultClient(): Promise<Client | null> {
 }
 
 /**
- * Get client configuration for LLM — resolves plan → model → provider dynamically
+ * Get client configuration for LLM — resolves plan → model → provider dynamically.
+ * Results are cached for CONFIG_TTL_MS to avoid repeated N+1 queries per message.
  */
 export async function getClientConfig(clientId?: string): Promise<ClientConfig> {
+  const cacheKey = clientId ?? "__default__";
+  const cached = CONFIG_CACHE.get(cacheKey);
+
+  if (cached && Date.now() < cached.expiresAt) {
+    logger.debug("ClientConfig desde caché", { cacheKey });
+    return cached.config;
+  }
+
   // deno-lint-ignore no-explicit-any
   let client: any = null;
 
@@ -122,6 +139,13 @@ export async function getClientConfig(clientId?: string): Promise<ClientConfig> 
   }
 
   if (!client) {
+    if (clientId) {
+      // El caller pidió un cliente específico — si no existe, es un error real,
+      // no un caso donde el fallback sea aceptable.
+      throw new Error(`Client "${clientId}" not found or inactive`);
+    }
+
+    // Sin clientId (ej: entorno de desarrollo con un solo cliente) — tomar el primero activo.
     const { data } = await supabase
       .from("clients")
       .select(CLIENT_WITH_PLAN_SELECT)
@@ -141,11 +165,16 @@ export async function getClientConfig(clientId?: string): Promise<ClientConfig> 
     throw new Error(`Client "${client.name}" has no active sales prompt in agent_prompts`);
   }
 
-  return {
+  const config: ClientConfig = {
     system_prompt: salesPromptContent,
     llm_temperature: client.llm_temperature,
     conversation_history_limit: client.conversation_history_limit,
     plan_name: client.plans?.name ?? "basico",
     llm: resolveLLM(client),
   };
+
+  CONFIG_CACHE.set(cacheKey, { config, expiresAt: Date.now() + CONFIG_TTL_MS });
+  logger.debug("ClientConfig cargado desde DB y cacheado", { cacheKey });
+
+  return config;
 }

@@ -60,6 +60,8 @@ export interface Lead {
   id: string;
   phone: string;
   client_id?: string;
+  classification?: 'hot' | 'warm' | 'cold' | null;
+  score?: number | null;
   bot_paused?: boolean;
   bot_paused_reason?: string;
   resumed_at?: string | null;
@@ -70,7 +72,7 @@ export interface AgentPrompt {
   name: string;
   description?: string;
   content: string;
-  agent_type: "sales" | "intent";
+  agent_type: "sales" | "intent" | "classifier";
   client_id: string | null; // null = global (intent)
   version: number;
   is_active: boolean;
@@ -120,6 +122,9 @@ export interface ExtractedData {
   timeline?: string;
   budget?: string;
   authority?: string;
+  productos_mencionados?: string[];
+  objecciones_detectadas?: string[];
+  venta_cruzada_oportunidad?: boolean;
 }
 
 export interface Classification {
@@ -165,7 +170,7 @@ export interface ClientProduct {
   is_active: boolean;
 }
 
-export type BotPausedReason = "no_catalog" | "out_of_stock" | "needs_images" | "transferred" | "order_confirmed" | "human_takeover";
+export type BotPausedReason = "no_catalog" | "out_of_stock" | "needs_images" | "transferred" | "order_confirmed" | "human_takeover" | "price_exception";
 
 export interface OrderItem {
   producto: string | null;

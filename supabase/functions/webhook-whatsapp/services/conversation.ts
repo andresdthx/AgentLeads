@@ -32,7 +32,7 @@ export async function getConversationHistory(
 ): Promise<Message[]> {
   const { data: history } = await supabase
     .from("messages")
-    .select("role, content")
+    .select("lead_id, role, content")
     .eq("lead_id", leadId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -66,6 +66,39 @@ export async function saveAssistantMessage(
     role: "assistant",
     content,
   });
+}
+
+/**
+ * Guarda la respuesta del bot y actualiza la clasificación del lead en una sola
+ * transacción atómica usando la RPC save_bot_response (migración 028).
+ *
+ * Garantiza que mensaje + clasificación se persistan juntos o no se persista
+ * ninguno, evitando el estado inconsistente: mensaje guardado pero lead sin
+ * actualizar (o viceversa) en caso de fallo entre las dos escrituras.
+ */
+export async function saveBotResponse(
+  leadId: string,
+  content: string,
+  classification?: {
+    score: number;
+    classification: string;
+    extracted_data?: Record<string, unknown>;
+    reasoning?: string;
+  }
+): Promise<void> {
+  const { error } = await supabase.rpc("save_bot_response", {
+    p_lead_id: leadId,
+    p_content: content,
+    p_score: classification?.score ?? null,
+    p_classification: classification?.classification ?? null,
+    p_extracted_data: classification?.extracted_data ? JSON.stringify(classification.extracted_data) : null,
+    p_reasoning: classification?.reasoning ?? null,
+  });
+
+  if (error) {
+    logger.error("Error en RPC save_bot_response", { leadId, error });
+    throw error;
+  }
 }
 
 /**
