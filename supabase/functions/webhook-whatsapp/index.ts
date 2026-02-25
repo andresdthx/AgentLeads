@@ -1,6 +1,9 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 /// <reference types="jsr:@supabase/functions-js/edge-runtime.d.ts" />
 
+// Valida variables de entorno al arrancar — falla rápido antes de procesar mensajes
+import "./config.ts";
+
 // Adapters: parse raw provider payloads → NormalizedMessage
 import { parseTwochatPayload } from "./adapters/twochat.ts";
 
@@ -46,9 +49,17 @@ Deno.serve(async (req) => {
     const body = await req.json();
 
     // Normalize raw payload to provider-agnostic NormalizedMessage
-    const msg = WHATSAPP_PROVIDER === "2chat"
-      ? parseTwochatPayload(body)
-      : parseTwochatPayload(body); // swap for wabaAdapter when implementing waba
+    // Add new cases here when implementing additional providers (e.g. waba)
+    let msg;
+    if (WHATSAPP_PROVIDER === "2chat") {
+      msg = parseTwochatPayload(body);
+    } else {
+      logger.error("Proveedor de WhatsApp no soportado", { provider: WHATSAPP_PROVIDER });
+      return new Response(
+        JSON.stringify({ ok: false, error: `Unsupported provider: ${WHATSAPP_PROVIDER}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
     if (!msg) {
       // Silently acknowledge: bot echoes, status callbacks, missing fields

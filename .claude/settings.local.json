@@ -34,7 +34,12 @@
       "Bash(SUPABASE_ACCESS_TOKEN=\"$SUPABASE_ACCESS_TOKEN\" \"$SUPA_BIN\" projects list:*)",
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 npx supabase:*)",
       "Bash(curl:*)",
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "Bash(cd:*)",
+      "Bash(cd \"C:\\\\Users\\\\andres.canchila_prag\\\\Documents\\\\personal_devs\\\\AgentsLeads\" && npm test 2>&1)",
+      "Bash(head:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(cd /c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads && git remote set-url origin https://github.com/andresdthx/AgentLeads.git && git push origin main 2>&1)"
     ]
   }
 }

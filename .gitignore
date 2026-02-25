@@ -55,3 +55,9 @@ deno.lock
 
 # Other
 code.txt
+logs_test
+prompts
+
+# agents IA
+.claude
+.agents

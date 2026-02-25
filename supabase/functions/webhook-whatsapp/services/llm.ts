@@ -1,6 +1,6 @@
 // LLM service - handles AI conversation and classification
 
-import type { LLMMessage, Classification, OrderData, Message, ClientConfig } from "../types/index.ts";
+import type { LLMMessage, OrderData, Message, ClientConfig } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("llm");
@@ -89,24 +89,6 @@ async function callLLM(
 }
 
 /**
- * Parse classification from LLM response
- */
-function parseClassification(response: string): Classification | null {
-  const classMatch = response.match(/CLASIFICACION([\s\S]*)FIN/);
-
-  if (!classMatch) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(classMatch[1].trim());
-  } catch (e) {
-    logger.warn("Error parseando bloque de clasificación", { error: e, raw: classMatch[1] });
-    return null;
-  }
-}
-
-/**
  * Parse order data from LLM response.
  * Detects a PEDIDO_INICIO ... PEDIDO_FIN block containing "pedido_confirmado": true.
  */
@@ -139,14 +121,14 @@ function cleanResponse(response: string): string {
 }
 
 /**
- * Generate LLM response and extract classification if present.
+ * Generate LLM response (sales agent only — classification is handled separately).
  * @param inventorySection - Bloque de contexto de inventario a inyectar al system prompt (opcional).
  */
 export async function generateResponse(
   history: Message[],
   config: ClientConfig,
   inventorySection?: string
-): Promise<{ response: string; classification: Classification | null; orderData: OrderData | null }> {
+): Promise<{ response: string; orderData: OrderData | null }> {
   const systemPrompt = inventorySection
     ? `${config.system_prompt}\n\n${inventorySection}`
     : config.system_prompt;
@@ -154,13 +136,11 @@ export async function generateResponse(
   const messages = buildLLMMessages(history, systemPrompt);
   const llmResponse = await callLLM(messages, config);
 
-  const classification = parseClassification(llmResponse);
   const orderData = parseOrderData(llmResponse);
   const cleanedResponse = cleanResponse(llmResponse);
 
   return {
     response: cleanedResponse,
-    classification,
     orderData,
   };
 }
