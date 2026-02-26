@@ -4,7 +4,7 @@
 // The call is fire-and-forget: failures are logged but never bubble up
 // to the main pipeline so the prospect's experience is never affected.
 
-import { sendWhatsAppMessage } from "./whatsapp.ts";
+import type { WhatsAppProvider } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("notification");
@@ -13,11 +13,13 @@ const logger = createLogger("notification");
  * Sends a WhatsApp alert to the client's sales agent when a lead
  * transitions to classification = "hot".
  *
+ * @param provider          - WhatsApp provider del canal activo (multi-tenant)
  * @param notificationPhone - international format without + (e.g. "573001234567")
  * @param leadPhone         - the prospect's phone number (for identification)
  * @param leadId            - UUID of the lead (for the dashboard deep-link)
  */
 export async function notifyHotLead(
+  provider: WhatsAppProvider,
   notificationPhone: string,
   leadPhone: string,
   leadId: string
@@ -29,7 +31,7 @@ export async function notifyHotLead(
     `Lead ID: ${leadId}`;
 
   try {
-    await sendWhatsAppMessage(notificationPhone, message);
+    await provider.sendMessage(notificationPhone, message);
     logger.info("Notificación hot lead enviada al agente", { notificationPhone, leadPhone, leadId });
   } catch (err) {
     // Never throw — a notification failure must not block the main flow.

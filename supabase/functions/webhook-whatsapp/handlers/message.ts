@@ -203,7 +203,7 @@ async function persistAndRespond(
     lead.classification !== "hot" &&
     notificationPhone
   ) {
-    notifyHotLead(notificationPhone, phone, lead.id);
+    notifyHotLead(provider, notificationPhone, phone, lead.id);
   }
 
   if (orderData) {

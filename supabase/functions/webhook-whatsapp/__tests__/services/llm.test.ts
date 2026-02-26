@@ -1,153 +1,194 @@
-// Tests for LLM service
+// Tests del servicio LLM — prueban funciones reales importadas de llm.ts
+//
+// Cobertura:
+//   resolveApiKey  — resolución de API key con fallback y error
+//   cleanResponse  — limpieza del texto de respuesta del LLM
+//   parseOrderData — parseo del bloque de pedido estructurado
 
 import {
   assertEquals,
   assertExists,
-  assertStringIncludes,
+  assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { createMockFetch, createTestMessage, setupTestEnv } from "../helpers/mocks.ts";
 
-// Mock the LLM module functions since we can't easily test the actual implementation
-// We'll test the parsing logic which is the most critical part
+import {
+  resolveApiKey,
+  cleanResponse,
+  parseOrderData,
+} from "../../services/llm.ts";
 
-Deno.test("LLM Service - Parse classification from response", () => {
-  const responseWithClassification = `Hola! Entiendo que necesitas una página web.
+// ---------------------------------------------------------------------------
+// resolveApiKey
+// ---------------------------------------------------------------------------
 
-CLASIFICACION
-{"score": 85, "classification": "hot", "extracted": {"need": "website", "timeline": "2 weeks", "budget": "$5000", "authority": "yes"}, "reasoning": "Clear need, urgent timeline, good budget"}
-FIN
-
-¿Cuándo necesitarías tener el sitio listo?`;
-
-  const classMatch = responseWithClassification.match(/CLASIFICACION([\s\S]*)FIN/);
-
-  assertExists(classMatch, "Should find classification block");
-
-  const classification = JSON.parse(classMatch![1].trim());
-
-  assertEquals(classification.score, 85);
-  assertEquals(classification.classification, "hot");
-  assertEquals(classification.extracted.need, "website");
-  assertEquals(classification.extracted.timeline, "2 weeks");
-  assertEquals(classification.reasoning, "Clear need, urgent timeline, good budget");
-});
-
-Deno.test("LLM Service - Parse classification returns null when not present", () => {
-  const responseWithoutClassification = "Hola! ¿En qué puedo ayudarte?";
-
-  const classMatch = responseWithoutClassification.match(/CLASIFICACION([\s\S]*)FIN/);
-
-  assertEquals(classMatch, null, "Should not find classification block");
-});
-
-Deno.test("LLM Service - Clean response removes classification block", () => {
-  const responseWithClassification = `Hola! Entiendo que necesitas una página web.
-
-CLASIFICACION
-{"score": 85, "classification": "hot", "extracted": {"need": "website"}, "reasoning": "test"}
-FIN
-
-¿Cuándo necesitarías tener el sitio listo?`;
-
-  const cleanedResponse = responseWithClassification
-    .replace(/CLASIFICACION[\s\S]*FIN/, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  assertEquals(
-    cleanedResponse,
-    "Hola! Entiendo que necesitas una página web.\n\n¿Cuándo necesitarías tener el sitio listo?"
-  );
-
-  // Should not contain classification markers
-  assertEquals(cleanedResponse.includes("CLASIFICACION"), false);
-  assertEquals(cleanedResponse.includes("FIN"), false);
-});
-
-Deno.test("LLM Service - Build LLM messages with system prompt", () => {
-  const SYSTEM_PROMPT = "You are a sales agent";
-  const messages = createTestMessage({ role: "user", content: "Hello" });
-
-  const llmMessages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: "Hello" },
-  ];
-
-  assertEquals(llmMessages.length, 2);
-  assertEquals(llmMessages[0].role, "system");
-  assertEquals(llmMessages[0].content, SYSTEM_PROMPT);
-  assertEquals(llmMessages[1].role, "user");
-  assertEquals(llmMessages[1].content, "Hello");
-});
-
-Deno.test("LLM Service - Handle malformed classification JSON", () => {
-  const responseWithBadJson = `Response text
-
-CLASIFICACION
-{invalid json here}
-FIN
-
-More text`;
-
-  const classMatch = responseWithBadJson.match(/CLASIFICACION([\s\S]*)FIN/);
-  assertExists(classMatch);
-
+Deno.test("resolveApiKey - retorna clave específica del proveedor cuando está configurada", () => {
+  Deno.env.set("LLM_API_KEY_OPENAI", "sk-openai-test-123");
+  Deno.env.delete("LLM_API_KEY");
   try {
-    JSON.parse(classMatch![1].trim());
-    throw new Error("Should have thrown");
-  } catch (e) {
-    assertExists(e, "Should catch JSON parse error");
+    const key = resolveApiKey("openai");
+    assertEquals(key, "sk-openai-test-123");
+  } finally {
+    Deno.env.delete("LLM_API_KEY_OPENAI");
   }
 });
 
-Deno.test("LLM Service - Classification with all fields", () => {
-  const fullClassification = {
-    score: 90,
-    classification: "hot",
-    extracted: {
-      need: "e-commerce platform",
-      timeline: "1 month",
-      budget: "$10000",
-      authority: "yes, I'm the CEO",
-    },
-    reasoning: "High budget, clear authority, urgent need",
-  };
-
-  const responseText = `Great!
-
-CLASIFICACION
-${JSON.stringify(fullClassification)}
-FIN
-
-Let me help you.`;
-
-  const classMatch = responseText.match(/CLASIFICACION([\s\S]*)FIN/);
-  const parsed = JSON.parse(classMatch![1].trim());
-
-  assertEquals(parsed.score, 90);
-  assertEquals(parsed.classification, "hot");
-  assertEquals(parsed.extracted.need, "e-commerce platform");
-  assertEquals(parsed.extracted.timeline, "1 month");
-  assertEquals(parsed.extracted.budget, "$10000");
-  assertEquals(parsed.extracted.authority, "yes, I'm the CEO");
-  assertStringIncludes(parsed.reasoning, "High budget");
+Deno.test("resolveApiKey - usa LLM_API_KEY como fallback cuando no hay clave del proveedor", () => {
+  Deno.env.delete("LLM_API_KEY_OPENAI");
+  Deno.env.set("LLM_API_KEY", "sk-fallback-456");
+  try {
+    const key = resolveApiKey("openai");
+    assertEquals(key, "sk-fallback-456");
+  } finally {
+    Deno.env.delete("LLM_API_KEY");
+  }
 });
 
-Deno.test("LLM Service - Classification scores and categories", () => {
-  const testCases = [
-    { score: 95, expected: "hot" },
-    { score: 75, expected: "hot" },
-    { score: 60, expected: "warm" },
-    { score: 50, expected: "warm" },
-    { score: 30, expected: "cold" },
-    { score: 10, expected: "cold" },
-  ];
+Deno.test("resolveApiKey - prefiere clave del proveedor sobre el fallback", () => {
+  Deno.env.set("LLM_API_KEY_OPENAI", "sk-specific");
+  Deno.env.set("LLM_API_KEY", "sk-fallback");
+  try {
+    const key = resolveApiKey("openai");
+    assertEquals(key, "sk-specific");
+  } finally {
+    Deno.env.delete("LLM_API_KEY_OPENAI");
+    Deno.env.delete("LLM_API_KEY");
+  }
+});
 
-  testCases.forEach(({ score, expected }) => {
-    let classification = "cold";
-    if (score >= 70) classification = "hot";
-    else if (score >= 40) classification = "warm";
+Deno.test("resolveApiKey - lanza error cuando no hay ninguna clave configurada", () => {
+  Deno.env.delete("LLM_API_KEY_OPENAI");
+  Deno.env.delete("LLM_API_KEY");
+  assertThrows(
+    () => resolveApiKey("openai"),
+    Error,
+    "No API key found for provider: openai"
+  );
+});
 
-    assertEquals(classification, expected, `Score ${score} should be ${expected}`);
-  });
+Deno.test("resolveApiKey - el slug del proveedor se convierte a mayúsculas para buscar la env var", () => {
+  Deno.env.set("LLM_API_KEY_ANTHROPIC", "sk-ant-test");
+  Deno.env.delete("LLM_API_KEY");
+  try {
+    const key = resolveApiKey("anthropic");
+    assertEquals(key, "sk-ant-test");
+  } finally {
+    Deno.env.delete("LLM_API_KEY_ANTHROPIC");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// cleanResponse
+// ---------------------------------------------------------------------------
+
+Deno.test("cleanResponse - elimina el bloque CLASIFICACION...FIN", () => {
+  const input =
+    "Hola! Te puedo ayudar.\n\nCLASIFICACION\n{\"score\": 85}\nFIN\n\n¿Qué necesitas?";
+  const result = cleanResponse(input);
+  assertEquals(result, "Hola! Te puedo ayudar.\n\n¿Qué necesitas?");
+});
+
+Deno.test("cleanResponse - elimina el bloque PEDIDO_INICIO...PEDIDO_FIN", () => {
+  const input =
+    "Perfecto, tu pedido está listo.\n\nPEDIDO_INICIO\n{\"pedido_confirmado\": true}\nPEDIDO_FIN\n\nGracias por tu compra.";
+  const result = cleanResponse(input);
+  assertEquals(result, "Perfecto, tu pedido está listo.\n\nGracias por tu compra.");
+});
+
+Deno.test("cleanResponse - colapsa saltos de línea excesivos en máximo dos", () => {
+  const input = "Línea 1\n\n\n\n\nLínea 2";
+  const result = cleanResponse(input);
+  assertEquals(result, "Línea 1\n\nLínea 2");
+});
+
+Deno.test("cleanResponse - no modifica texto sin bloques especiales", () => {
+  const input = "Hola! ¿En qué te puedo ayudar hoy?";
+  const result = cleanResponse(input);
+  assertEquals(result, input);
+});
+
+Deno.test("cleanResponse - elimina ambos bloques cuando están presentes", () => {
+  const input =
+    "Respuesta.\n\nCLASIFICACION\n{}\nFIN\n\nPEDIDO_INICIO\n{}\nPEDIDO_FIN\n\nFin.";
+  const result = cleanResponse(input);
+  assertEquals(result, "Respuesta.\n\nFin.");
+});
+
+Deno.test("cleanResponse - aplica trim al resultado", () => {
+  const input = "\n\nHola!\n\n";
+  const result = cleanResponse(input);
+  assertEquals(result, "Hola!");
+});
+
+// ---------------------------------------------------------------------------
+// parseOrderData
+// ---------------------------------------------------------------------------
+
+Deno.test("parseOrderData - retorna null cuando no hay bloque PEDIDO", () => {
+  const result = parseOrderData("Texto normal sin pedido.");
+  assertEquals(result, null);
+});
+
+Deno.test("parseOrderData - parsea un bloque de pedido válido", () => {
+  const orderPayload = {
+    pedido_confirmado: true,
+    ciudad_envio: "Bogotá",
+    tipo_cliente: "detal",
+    items: [{ producto: "Nike Air Force 1", talla: "42", cantidad: 1 }],
+  };
+  const input = `Ok, procesado.\n\nPEDIDO_INICIO\n${JSON.stringify(orderPayload)}\nPEDIDO_FIN`;
+
+  const result = parseOrderData(input);
+
+  assertExists(result);
+  assertEquals(result!.pedido_confirmado, true);
+  assertEquals(result!.ciudad_envio, "Bogotá");
+  assertEquals(result!.tipo_cliente, "detal");
+  assertEquals(result!.items.length, 1);
+  assertEquals(result!.items[0].talla, "42");
+});
+
+Deno.test("parseOrderData - retorna null cuando pedido_confirmado es false", () => {
+  const orderPayload = {
+    pedido_confirmado: false,
+    ciudad_envio: null,
+    tipo_cliente: null,
+    items: [],
+  };
+  const input = `PEDIDO_INICIO\n${JSON.stringify(orderPayload)}\nPEDIDO_FIN`;
+
+  const result = parseOrderData(input);
+  assertEquals(result, null);
+});
+
+Deno.test("parseOrderData - retorna null cuando items no es un array", () => {
+  const orderPayload = { pedido_confirmado: true, items: null };
+  const input = `PEDIDO_INICIO\n${JSON.stringify(orderPayload)}\nPEDIDO_FIN`;
+
+  const result = parseOrderData(input);
+  assertEquals(result, null);
+});
+
+Deno.test("parseOrderData - retorna null cuando el JSON está malformado", () => {
+  const input = "PEDIDO_INICIO\n{json inválido aquí\nPEDIDO_FIN";
+  const result = parseOrderData(input);
+  assertEquals(result, null);
+});
+
+Deno.test("parseOrderData - maneja múltiples items correctamente", () => {
+  const orderPayload = {
+    pedido_confirmado: true,
+    ciudad_envio: "Medellín",
+    tipo_cliente: "mayorista",
+    items: [
+      { producto: "Nike Air Max", talla: "40", cantidad: 2 },
+      { producto: "Adidas Stan Smith", talla: "42", cantidad: 1 },
+    ],
+  };
+  const input = `PEDIDO_INICIO\n${JSON.stringify(orderPayload)}\nPEDIDO_FIN`;
+
+  const result = parseOrderData(input);
+
+  assertExists(result);
+  assertEquals(result!.items.length, 2);
+  assertEquals(result!.tipo_cliente, "mayorista");
 });

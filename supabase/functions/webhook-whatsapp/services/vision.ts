@@ -28,11 +28,13 @@ const VISION_PROMPT_FALLBACK =
   "Si es un pantallazo de catálogo o lista de precios, transcribe la información relevante del producto. " +
   "Si no contiene ningún producto identificable, responde exactamente: 'imagen sin producto identificable'.";
 
-// Cache de módulo — persiste mientras la instancia Edge Function esté caliente
+// Cache con TTL — se invalida cada 5 min para que cambios en agent_prompts se reflejen sin reiniciar
 let _cachedVisionPrompt: string | null = null;
+let _visionCacheExpiresAt = 0;
+const VISION_CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function getVisionPrompt(): Promise<string> {
-  if (_cachedVisionPrompt) return _cachedVisionPrompt;
+  if (_cachedVisionPrompt && Date.now() < _visionCacheExpiresAt) return _cachedVisionPrompt;
 
   const { data, error } = await supabase
     .from("agent_prompts")
@@ -48,6 +50,7 @@ async function getVisionPrompt(): Promise<string> {
   }
 
   _cachedVisionPrompt = data.content as string;
+  _visionCacheExpiresAt = Date.now() + VISION_CACHE_TTL_MS;
   logger.debug("Vision prompt cargado desde DB y cacheado");
   return _cachedVisionPrompt;
 }

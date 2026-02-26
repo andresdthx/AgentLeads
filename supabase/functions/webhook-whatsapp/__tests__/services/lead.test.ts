@@ -1,4 +1,12 @@
-// Tests for Lead service
+// Tests del mock de infraestructura para el servicio Lead
+//
+// ⚠️  Estos tests prueban el createMockSupabaseClient de helpers/mocks.ts,
+//     NO los servicios reales (getOrCreateLead, pauseLead, saveOrderData).
+//     lead.ts instancia su propio cliente de Supabase internamente, por lo
+//     que no es inyectable hasta implementar Repository Pattern.
+//
+//     Valor actual: verifican que el mock se comporta correctamente,
+//     sirviendo como contrato de referencia para tests futuros.
 
 import {
   assertEquals,
