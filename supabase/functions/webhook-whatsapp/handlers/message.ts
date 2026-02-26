@@ -13,6 +13,7 @@
 import type { NormalizedMessage, WhatsAppProvider, Lead, Client, ClientConfig, OrderData, Message, Classification } from "../types/index.ts";
 
 import { getOrCreateLead, saveOrderData, pauseLead } from "../services/lead.ts";
+import { notifyHotLead } from "../services/notification.ts";
 import { classifyConversation } from "../services/classifier.ts";
 import {
   saveUserMessage,
@@ -56,7 +57,17 @@ async function resolveMessageText(
     logger.info("Imagen recibida, procesando con Vision API", { phone, url: incomingMedia.url });
     const description = await describeProductImage(incomingMedia.url);
     logger.info("Imagen procesada", { phone, description });
-    return description;
+
+    if (description.trim().toLowerCase() === "imagen sin producto identificable") {
+      // Vision couldn't identify a product — give the LLM a clear instruction
+      // instead of a contradictory marker, so it asks for reference/description.
+      logger.debug("Vision no identificó producto — usando marker de acción", { phone });
+      return "[El cliente envió una imagen pero no se pudo identificar el producto. Pídele la referencia del catálogo o que describa qué producto busca.]";
+    }
+
+    // Prefix preserves intent context for the classifier: a user sending an image
+    // is showing product interest, not just describing something.
+    return `[Imagen enviada por el cliente — producto de interés]: ${description}`;
   }
 
   if (incomingMedia?.type === "audio") {
@@ -163,7 +174,8 @@ async function persistAndRespond(
   orderData: OrderData | null,
   provider: WhatsAppProvider,
   classification: Classification | null,
-  productIntentData: Record<string, unknown> | undefined
+  productIntentData: Record<string, unknown> | undefined,
+  notificationPhone: string | null | undefined
 ): Promise<void> {
   // Construir payload de clasificación para la RPC (si aplica).
   // productIntentData ya tiene la forma { product_intent: {...} } — no re-envolver.
@@ -182,6 +194,17 @@ async function persistAndRespond(
 
   // Enviar al cliente (llamada externa — fuera de la transacción)
   await provider.sendMessage(phone, response);
+
+  // Notificar al agente de ventas si el lead acaba de volverse hot.
+  // Se compara con la clasificación previa del lead (antes de este turno).
+  // fire-and-forget: el fallo de notificación nunca afecta al prospecto.
+  if (
+    classification?.classification === "hot" &&
+    lead.classification !== "hot" &&
+    notificationPhone
+  ) {
+    notifyHotLead(notificationPhone, phone, lead.id);
+  }
 
   if (orderData) {
     await saveOrderData(lead.id, orderData);
@@ -349,7 +372,8 @@ export async function handleIncomingMessage(
   // 11. Persistir mensaje + clasificación en una sola RPC atómica y enviar al cliente.
   await persistAndRespond(
     lead, phone, response, orderData, provider,
-    classificationResult, productContext.productIntentData
+    classificationResult, productContext.productIntentData,
+    client.notification_phone
   );
 
   return { ok: true };

@@ -12,6 +12,11 @@ import { createTwochatProvider } from "./providers/twochat.ts";
 
 import { handleIncomingMessage } from "./handlers/message.ts";
 import { createLogger } from "./utils/logger.ts";
+import {
+  checkRateLimit,
+  checkGlobalRateLimit,
+  isPayloadTooLarge,
+} from "./utils/security.ts";
 
 const logger = createLogger("index");
 
@@ -25,24 +30,41 @@ const logger = createLogger("index");
 // ---------------------------------------------------------------------------
 const WHATSAPP_PROVIDER = Deno.env.get("WHATSAPP_PROVIDER") ?? "2chat";
 
-// Instantiate provider once per warm Edge Function instance (not per request)
-const provider = (() => {
-  switch (WHATSAPP_PROVIDER) {
-    case "2chat":
-    default:
-      if (WHATSAPP_PROVIDER !== "2chat") {
-        logger.warn(`Proveedor desconocido "${WHATSAPP_PROVIDER}", usando 2chat como fallback`);
-      }
-      return createTwochatProvider();
-  }
-})();
-
 // ---------------------------------------------------------------------------
 // Webhook entry point
 // ---------------------------------------------------------------------------
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
+  }
+
+  // --- Guard: payload demasiado grande (DoS por body) ---
+  if (isPayloadTooLarge(req)) {
+    logger.warn("Payload rechazado por tamaño excesivo", {
+      contentLength: req.headers.get("content-length"),
+    });
+    return new Response(
+      JSON.stringify({ ok: false, error: "Payload too large" }),
+      { status: 413, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // --- Guard: rate limit global por canal (IP del origen) ---
+  // Usamos el header de IP real si está disponible (Supabase lo inyecta como x-forwarded-for)
+  const clientIp =
+    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  if (!checkGlobalRateLimit(clientIp)) {
+    logger.warn("Rate limit global superado", { clientIp });
+    return new Response(
+      JSON.stringify({ ok: false, error: "Too many requests" }),
+      {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": "60",
+        },
+      }
+    );
   }
 
   try {
@@ -66,6 +88,34 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({ ok: true, skipped: true, reason: "not_processable" }),
         { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // --- Guard: rate limit por número de teléfono (anti-flood por usuario) ---
+    if (!checkRateLimit(`phone:${msg.phone}`)) {
+      logger.warn("Rate limit por teléfono superado", { phone: msg.phone });
+      return new Response(
+        JSON.stringify({ ok: false, error: "Too many requests" }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "60",
+          },
+        }
+      );
+    }
+
+    // Provider instantiated per-request so from_number matches the inbound channel phone.
+    // This supports multiple clients with different WhatsApp numbers on the same account.
+    let provider;
+    if (WHATSAPP_PROVIDER === "2chat") {
+      provider = createTwochatProvider(msg.channelPhone);
+    } else {
+      logger.error("Proveedor de WhatsApp no soportado para envío", { provider: WHATSAPP_PROVIDER });
+      return new Response(
+        JSON.stringify({ ok: false, error: `Unsupported provider: ${WHATSAPP_PROVIDER}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 

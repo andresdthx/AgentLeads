@@ -6,6 +6,8 @@
 //   logger.info("Lead created", { leadId, phone });
 //   logger.error("DB error", error);
 
+import { sanitizeLogData } from "./security.ts";
+
 type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
 interface LogEntry {
@@ -25,7 +27,7 @@ class Logger {
       level,
       service: this.service,
       msg,
-      ...(data !== undefined && { data }),
+      ...(data !== undefined && { data: sanitizeLogData(data) }),
     };
 
     // Single-line JSON → Supabase log viewer lo parsea y filtra por campo

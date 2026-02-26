@@ -9,6 +9,11 @@
 // Whisper supports: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm.
 
 import { createLogger } from "../utils/logger.ts";
+import {
+  isSafeMediaUrl,
+  fetchWithTimeout,
+  MAX_MEDIA_BYTES,
+} from "../utils/security.ts";
 
 const logger = createLogger("audio");
 
@@ -45,15 +50,42 @@ export async function transcribeAudio(
     throw new Error("OpenAI API key not configured for audio transcription");
   }
 
-  // 1. Download audio from S3 (public URL, no auth needed)
-  const audioResponse = await fetch(audioUrl);
+  // 1. Validar URL antes de fetchear (protección SSRF)
+  if (!isSafeMediaUrl(audioUrl)) {
+    logger.error("URL de audio bloqueada por SSRF guard", { audioUrl });
+    throw new Error("URL de audio no permitida");
+  }
+
+  // Download audio from S3 (public URL, no auth needed) — timeout 15 s
+  const audioResponse = await fetchWithTimeout(audioUrl, {}, 15_000);
   if (!audioResponse.ok) {
     throw new Error(
       `Error descargando audio: HTTP ${audioResponse.status}`
     );
   }
 
+  // Verificar tamaño antes de cargar en memoria (evita OOM con archivos enormes)
+  const contentLength = parseInt(
+    audioResponse.headers.get("content-length") ?? "0",
+    10
+  );
+  if (contentLength > MAX_MEDIA_BYTES) {
+    logger.error("Archivo de audio excede el límite de tamaño", {
+      bytes: contentLength,
+      limit: MAX_MEDIA_BYTES,
+    });
+    throw new Error("Archivo de audio demasiado grande");
+  }
+
   const audioBuffer = await audioResponse.arrayBuffer();
+
+  // Segunda verificación: el servidor puede no enviar Content-Length
+  if (audioBuffer.byteLength > MAX_MEDIA_BYTES) {
+    logger.error("Buffer de audio excede el límite de tamaño", {
+      bytes: audioBuffer.byteLength,
+    });
+    throw new Error("Archivo de audio demasiado grande");
+  }
   // MIME puede incluir parámetros: "audio/ogg; codecs=opus" → base = "audio/ogg"
   const baseMime = mimeType.split(";")[0].trim();
   const ext = MIME_TO_EXT[baseMime] ?? "ogg"; // fallback a ogg (más común en WhatsApp)
@@ -67,15 +99,19 @@ export async function transcribeAudio(
   formData.append("model", WHISPER_MODEL);
   formData.append("language", "es"); // Spanish — improves accuracy for Colombian dialect
 
-  // 3. Call Whisper API
-  const whisperResponse = await fetch(OPENAI_TRANSCRIPTION_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      // Content-Type is set automatically by fetch when using FormData
+  // 3. Call Whisper API — timeout 30 s (Whisper puede tardar en archivos grandes)
+  const whisperResponse = await fetchWithTimeout(
+    OPENAI_TRANSCRIPTION_ENDPOINT,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        // Content-Type es seteado automáticamente por fetch con FormData
+      },
+      body: formData,
     },
-    body: formData,
-  });
+    30_000
+  );
 
   if (!whisperResponse.ok) {
     const err = await whisperResponse.text();

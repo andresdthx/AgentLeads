@@ -39,7 +39,8 @@
       "Bash(cd \"C:\\\\Users\\\\andres.canchila_prag\\\\Documents\\\\personal_devs\\\\AgentsLeads\" && npm test 2>&1)",
       "Bash(head:*)",
       "Bash(cmd.exe:*)",
-      "Bash(cd /c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads && git remote set-url origin https://github.com/andresdthx/AgentLeads.git && git push origin main 2>&1)"
+      "Bash(cd /c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads && git remote set-url origin https://github.com/andresdthx/AgentLeads.git && git push origin main 2>&1)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

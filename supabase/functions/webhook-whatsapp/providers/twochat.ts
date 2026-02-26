@@ -6,15 +6,15 @@
 
 import type { WhatsAppProvider } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
+import { fetchWithTimeout } from "../utils/security.ts";
 
 const logger = createLogger("provider:twochat");
 
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 1000; // 1s → 2s → 4s
 
-export function createTwochatProvider(): WhatsAppProvider {
+export function createTwochatProvider(fromNumber: string): WhatsAppProvider {
   const apiKey = Deno.env.get("TWOCHAT_API_KEY")!;
-  const fromNumber = Deno.env.get("TWOCHAT_FROM_NUMBER")!;
   const baseUrl = Deno.env.get("WPP_ORQUESTER_PROVIDER_URL")!;
   const path = Deno.env.get("WPP_ORQUESTER_PROVIDER_PATH")!;
 
@@ -24,14 +24,19 @@ export function createTwochatProvider(): WhatsAppProvider {
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
-          const response = await fetch(`${baseUrl}${path}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-User-API-Key": apiKey,
+          // Timeout de 8 s por intento (evita que un envío colgado bloquee la función)
+          const response = await fetchWithTimeout(
+            `${baseUrl}${path}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-User-API-Key": apiKey,
+              },
+              body: JSON.stringify({ to_number: to, from_number: fromNumber, text }),
             },
-            body: JSON.stringify({ to_number: to, from_number: fromNumber, text }),
-          });
+            8_000
+          );
 
           const data = await response.json();
 

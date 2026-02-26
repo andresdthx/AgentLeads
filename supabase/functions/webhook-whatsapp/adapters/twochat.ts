@@ -9,6 +9,13 @@
 //   - Return null for payloads that should be silently acknowledged
 
 import type { NormalizedMessage, NormalizedMediaType } from "../types/index.ts";
+import {
+  isValidPhone,
+  isTextWithinLimit,
+  isValidMimeType,
+  isSafeMediaUrl,
+  MAX_TEXT_LENGTH,
+} from "../utils/security.ts";
 
 // 2chat raw type → normalized type
 // "ptt" = push-to-talk (WhatsApp voice messages)
@@ -36,22 +43,39 @@ export function parseTwochatPayload(body: any): NormalizedMessage | null {
 
   if (!phone || !channelPhone) return null;
 
+  // Validar formato de teléfono (E.164 / WhatsApp)
+  if (!isValidPhone(phone) || !isValidPhone(channelPhone)) return null;
+
   const text: string | undefined = body?.message?.text || undefined;
   const rawMedia = body?.message?.media;
 
   // Must have at least text or media
   if (!text && !rawMedia?.url) return null;
 
+  // Truncar texto que exceda el límite en lugar de rechazar (experiencia de usuario)
+  const safeText: string | undefined = text
+    ? isTextWithinLimit(text)
+      ? text
+      : text.substring(0, MAX_TEXT_LENGTH)
+    : undefined;
+
   let media: NormalizedMessage["media"] | undefined;
 
   if (rawMedia?.url) {
+    // Bloquear URLs de media inseguras (SSRF)
+    if (!isSafeMediaUrl(rawMedia.url)) return null;
+
+    const rawMime = rawMedia.mime_type ?? "application/octet-stream";
+    // Sanear MIME type antes de propagar
+    const safeMime = isValidMimeType(rawMime) ? rawMime : "application/octet-stream";
+
     const normalizedType: NormalizedMediaType =
       MEDIA_TYPE_MAP[rawMedia.type] ?? "document";
 
     media = {
       url: rawMedia.url,
       type: normalizedType,
-      mimeType: rawMedia.mime_type ?? "application/octet-stream",
+      mimeType: safeMime,
     };
   }
 
@@ -59,7 +83,7 @@ export function parseTwochatPayload(body: any): NormalizedMessage | null {
     phone,
     channelPhone,
     sentBy: "user",
-    text,
+    text: safeText,
     media,
   };
 }

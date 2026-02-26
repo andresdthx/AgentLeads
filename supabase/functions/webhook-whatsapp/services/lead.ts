@@ -2,7 +2,6 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Lead, Classification, OrderData, BotPausedReason } from "../types/index.ts";
-import { saveHandoffNote } from "./conversation.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("lead");
@@ -139,7 +138,8 @@ export async function saveOrderData(
 
 /**
  * Reactiva el bot para un lead — el humano devuelve el control.
- * Guarda una nota de contexto en el historial para que el LLM sepa que hubo una pausa.
+ * La nota de handoff la inserta la RPC toggle_bot_pause (migración 027).
+ * No llamar saveHandoffNote() aquí para evitar duplicar la nota en el historial.
  */
 export async function resumeLead(leadId: string): Promise<void> {
   const { error } = await supabase
@@ -148,6 +148,7 @@ export async function resumeLead(leadId: string): Promise<void> {
       bot_paused: false,
       bot_paused_reason: null,
       resumed_at: new Date().toISOString(),
+      status: "bot_active",
     })
     .eq("id", leadId);
 
@@ -156,8 +157,7 @@ export async function resumeLead(leadId: string): Promise<void> {
     throw error;
   }
 
-  await saveHandoffNote(leadId);
-  logger.info("Bot reactivado — nota de handoff guardada", { leadId });
+  logger.info("Bot reactivado", { leadId });
 }
 
 /**
@@ -167,12 +167,15 @@ export async function pauseLead(
   leadId: string,
   reason: BotPausedReason
 ): Promise<void> {
+  const status = reason === "order_confirmed" ? "resolved" : "human_active";
+
   const { error } = await supabase
     .from("leads")
     .update({
       bot_paused: true,
       bot_paused_at: new Date().toISOString(),
       bot_paused_reason: reason,
+      status,
     })
     .eq("id", leadId);
 
@@ -181,5 +184,5 @@ export async function pauseLead(
     throw error;
   }
 
-  logger.info("Bot pausado — humano en control", { leadId, reason });
+  logger.info("Bot pausado — humano en control", { leadId, reason, status });
 }

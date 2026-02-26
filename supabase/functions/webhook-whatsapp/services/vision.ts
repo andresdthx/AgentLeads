@@ -9,6 +9,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createLogger } from "../utils/logger.ts";
+import { isSafeMediaUrl, fetchWithTimeout } from "../utils/security.ts";
 
 const logger = createLogger("vision");
 
@@ -65,35 +66,46 @@ export async function describeProductImage(imageUrl: string): Promise<string> {
     throw new Error("OpenAI API key not configured for vision");
   }
 
+  // Protección SSRF: solo URLs HTTPS con hosts públicos
+  if (!isSafeMediaUrl(imageUrl)) {
+    logger.error("URL de imagen bloqueada por SSRF guard", { imageUrl });
+    throw new Error("URL de imagen no permitida");
+  }
+
   const visionPrompt = await getVisionPrompt();
 
-  const response = await fetch(OPENAI_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+  // Timeout 20 s para Vision API
+  const response = await fetchWithTimeout(
+    OPENAI_ENDPOINT,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: { url: imageUrl },
+              },
+              {
+                type: "text",
+                text: visionPrompt,
+              },
+            ],
+          },
+        ],
+        max_tokens: 200,
+        temperature: 0,
+      }),
     },
-    body: JSON.stringify({
-      model: VISION_MODEL,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: { url: imageUrl },
-            },
-            {
-              type: "text",
-              text: visionPrompt,
-            },
-          ],
-        },
-      ],
-      max_tokens: 200,
-      temperature: 0,
-    }),
-  });
+    20_000
+  );
 
   if (!response.ok) {
     const err = await response.text();

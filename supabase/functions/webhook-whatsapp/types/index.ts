@@ -93,6 +93,7 @@ export interface Client {
   plan_id?: string;
   product_mode: 'inventory' | 'catalog'; // How products are handled for this client
   catalog_url?: string | null;           // Required when product_mode = 'catalog'
+  notification_phone?: string | null;    // Sales agent WhatsApp for hot-lead alerts (intl. format, no +)
 }
 
 export interface LLMModelResolved {
