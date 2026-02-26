@@ -1,4 +1,12 @@
-// Tests for Conversation service
+// Tests del mock de infraestructura para el servicio Conversation
+//
+// ⚠️  Estos tests prueban el createMockSupabaseClient de helpers/mocks.ts,
+//     NO los servicios reales (saveUserMessage, saveBotResponse, getConversationHistory).
+//     conversation.ts usa RPCs de Supabase directamente y no es inyectable
+//     hasta implementar Repository Pattern.
+//
+//     Valor actual: verifican el comportamiento del mock y documentan
+//     los contratos esperados del servicio para implementación futura.
 
 import {
   assertEquals,

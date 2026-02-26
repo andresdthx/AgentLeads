@@ -10,7 +10,7 @@ const logger = createLogger("llm");
  * Looks for LLM_API_KEY_<PROVIDER> first, falls back to LLM_API_KEY.
  * Secrets deben estar configurados en Supabase Edge Function secrets.
  */
-function resolveApiKey(providerSlug: string): string {
+export function resolveApiKey(providerSlug: string): string {
   const key = Deno.env.get(`LLM_API_KEY_${providerSlug.toUpperCase()}`);
   if (key) return key;
   const fallback = Deno.env.get("LLM_API_KEY");
@@ -92,7 +92,7 @@ async function callLLM(
  * Parse order data from LLM response.
  * Detects a PEDIDO_INICIO ... PEDIDO_FIN block containing "pedido_confirmado": true.
  */
-function parseOrderData(response: string): OrderData | null {
+export function parseOrderData(response: string): OrderData | null {
   const blockMatch = response.match(/PEDIDO_INICIO\s*([\s\S]*?)\s*PEDIDO_FIN/);
 
   if (!blockMatch) return null;
@@ -112,7 +112,7 @@ function parseOrderData(response: string): OrderData | null {
 /**
  * Clean response by removing classification block and order JSON block
  */
-function cleanResponse(response: string): string {
+export function cleanResponse(response: string): string {
   return response
     .replace(/CLASIFICACION[\s\S]*?FIN/, "")
     .replace(/PEDIDO_INICIO[\s\S]*?PEDIDO_FIN/, "")

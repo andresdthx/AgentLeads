@@ -14,6 +14,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Message, Classification, ClientConfig } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
+import { resolveApiKey } from "./llm.ts";
 
 const logger = createLogger("classifier");
 
@@ -100,9 +101,7 @@ export async function classifyConversation(
     },
   ];
 
-  const apiKey =
-    Deno.env.get(`LLM_API_KEY_${config.llm.provider_slug.toUpperCase()}`) ??
-    Deno.env.get("LLM_API_KEY")!;
+  const apiKey = resolveApiKey(config.llm.provider_slug);
 
   const authHeader = config.llm.api_key_prefix
     ? `${config.llm.api_key_prefix} ${apiKey}`

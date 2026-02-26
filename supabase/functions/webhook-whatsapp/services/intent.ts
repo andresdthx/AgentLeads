@@ -5,6 +5,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Message, ProductIntent, ClientConfig } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
+import { resolveApiKey } from "./llm.ts";
 
 const logger = createLogger("intent");
 
@@ -45,11 +46,13 @@ Formato de respuesta (JSON exacto, sin markdown):
   "confidence": "high" | "medium" | "low"
 }`;
 
-// Cache de módulo — persiste mientras la instancia Edge Function esté caliente
+// Cache con TTL — se invalida cada 5 min para que cambios en agent_prompts se reflejen sin reiniciar
 let _cachedIntentPrompt: string | null = null;
+let _intentCacheExpiresAt = 0;
+const INTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function getIntentPrompt(): Promise<string> {
-  if (_cachedIntentPrompt) return _cachedIntentPrompt;
+  if (_cachedIntentPrompt && Date.now() < _intentCacheExpiresAt) return _cachedIntentPrompt;
 
   const { data, error } = await supabase
     .from("agent_prompts")
@@ -65,6 +68,7 @@ async function getIntentPrompt(): Promise<string> {
   }
 
   _cachedIntentPrompt = data.content as string;
+  _intentCacheExpiresAt = Date.now() + INTENT_CACHE_TTL_MS;
   logger.debug("Intent prompt cargado desde DB y cacheado");
   return _cachedIntentPrompt;
 }
@@ -98,9 +102,7 @@ export async function extractProductIntent(
     ...recentHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  const apiKey =
-    Deno.env.get(`LLM_API_KEY_${config.llm.provider_slug.toUpperCase()}`) ??
-    Deno.env.get("LLM_API_KEY")!;
+  const apiKey = resolveApiKey(config.llm.provider_slug);
 
   const authHeader = config.llm.api_key_prefix
     ? `${config.llm.api_key_prefix} ${apiKey}`
