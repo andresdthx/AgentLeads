@@ -49,6 +49,16 @@ export function parseTwochatPayload(body: any): NormalizedMessage | null {
   const text: string | undefined = body?.message?.text || undefined;
   const rawMedia = body?.message?.media;
 
+  // Extract quoted message text if the user replied to a previous message.
+  // 2chat embeds the original message under body.message.quoted_msg.message.text.
+  // We extract only the text of the quoted message; media in quoted messages is ignored.
+  const quotedRawText: string | undefined = body?.message?.quoted_msg?.message?.text || undefined;
+  const quotedText: string | undefined = quotedRawText
+    ? isTextWithinLimit(quotedRawText)
+      ? quotedRawText
+      : quotedRawText.substring(0, MAX_TEXT_LENGTH)
+    : undefined;
+
   // Must have at least text or media
   if (!text && !rawMedia?.url) return null;
 
@@ -85,5 +95,6 @@ export function parseTwochatPayload(body: any): NormalizedMessage | null {
     sentBy: "user",
     text: safeText,
     media,
+    quotedText,
   };
 }
