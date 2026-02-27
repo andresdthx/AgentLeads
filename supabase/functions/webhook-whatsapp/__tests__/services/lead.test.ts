@@ -15,18 +15,19 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createMockSupabaseClient, createTestLead, createTestClassification } from "../helpers/mocks.ts";
 
-Deno.test("Lead Service - Find lead by phone", async () => {
+Deno.test("Lead Service - Find lead by phone scoped to client", async () => {
   const mockClient = createMockSupabaseClient();
   const testLead = createTestLead({ phone: "+1234567890" });
 
   // Seed the mock database
   mockClient._seed("leads", [testLead]);
 
-  // Simulate findLeadByPhone
+  // Simulate findLeadByPhone(phone, clientId)
   const { data: lead } = await mockClient
     .from("leads")
     .select()
     .eq("phone", "+1234567890")
+    .eq("client_id", testLead.client_id)
     .single();
 
   assertExists(lead);
@@ -41,6 +42,26 @@ Deno.test("Lead Service - Find lead returns null when not found", async () => {
     .from("leads")
     .select()
     .eq("phone", "+9999999999")
+    .eq("client_id", "some-client-id")
+    .single();
+
+  assertEquals(lead, null);
+});
+
+Deno.test("Lead Service - Find lead returns null for wrong client (multi-tenant isolation)", async () => {
+  const mockClient = createMockSupabaseClient();
+  const clientA = crypto.randomUUID();
+  const clientB = crypto.randomUUID();
+  const testLead = createTestLead({ phone: "+1234567890", client_id: clientA });
+
+  mockClient._seed("leads", [testLead]);
+
+  // clientB no debe encontrar el lead de clientA aunque tengan el mismo teléfono
+  const { data: lead } = await mockClient
+    .from("leads")
+    .select()
+    .eq("phone", "+1234567890")
+    .eq("client_id", clientB)
     .single();
 
   assertEquals(lead, null);
@@ -120,11 +141,12 @@ Deno.test("Lead Service - Get or create lead (existing)", async () => {
 
   mockClient._seed("leads", [existingLead]);
 
-  // Try to get or create
+  // Simulate findLeadByPhone(phone, clientId)
   const { data: lead } = await mockClient
     .from("leads")
     .select()
     .eq("phone", "+1234567890")
+    .eq("client_id", existingLead.client_id)
     .single();
 
   assertExists(lead);
@@ -138,12 +160,14 @@ Deno.test("Lead Service - Get or create lead (existing)", async () => {
 
 Deno.test("Lead Service - Get or create lead (new)", async () => {
   const mockClient = createMockSupabaseClient();
+  const clientId = crypto.randomUUID();
 
-  // Try to find (should return null)
+  // Try to find (should return null) — simulate findLeadByPhone(phone, clientId)
   const { data: existingLead } = await mockClient
     .from("leads")
     .select()
     .eq("phone", "+1234567890")
+    .eq("client_id", clientId)
     .single();
 
   assertEquals(existingLead, null);
@@ -200,8 +224,9 @@ Deno.test("Lead Service - Classification with extracted data", async () => {
 
 Deno.test("Lead Service - Multiple leads with different phones", async () => {
   const mockClient = createMockSupabaseClient();
-  const lead1 = createTestLead({ phone: "+1111111111" });
-  const lead2 = createTestLead({ phone: "+2222222222" });
+  const clientId = crypto.randomUUID();
+  const lead1 = createTestLead({ phone: "+1111111111", client_id: clientId });
+  const lead2 = createTestLead({ phone: "+2222222222", client_id: clientId });
 
   mockClient._seed("leads", [lead1, lead2]);
 
@@ -209,12 +234,14 @@ Deno.test("Lead Service - Multiple leads with different phones", async () => {
     .from("leads")
     .select()
     .eq("phone", "+1111111111")
+    .eq("client_id", clientId)
     .single();
 
   const { data: foundLead2 } = await mockClient
     .from("leads")
     .select()
     .eq("phone", "+2222222222")
+    .eq("client_id", clientId)
     .single();
 
   assertExists(foundLead1);

@@ -10,7 +10,7 @@
 // Cada función de pipeline tiene una sola responsabilidad. El orquestador
 // solo toma decisiones de alto nivel y delega la ejecución a los pipelines.
 
-import type { NormalizedMessage, WhatsAppProvider, Lead, Client, ClientConfig, OrderData, Message, Classification } from "../types/index.ts";
+import type { NormalizedMessage, WhatsAppProvider, Lead, Client, ClientConfig, OrderData, Message, Classification, VisionResult } from "../types/index.ts";
 
 import { getOrCreateLead, saveOrderData, pauseLead } from "../services/lead.ts";
 import { notifyHotLead } from "../services/notification.ts";
@@ -23,7 +23,8 @@ import {
 import { generateResponse } from "../services/llm.ts";
 import { getClientConfig, getClientByChannelPhone } from "../services/client.ts";
 import { hasProductKeywords, extractProductIntent } from "../services/intent.ts";
-import { queryInventory, clientHasCatalog, buildInventorySection, buildCatalogSection } from "../services/inventory.ts";
+import { queryInventory, clientHasCatalog, buildInventorySection, buildCatalogSection, buildCatalogSearchSection } from "../services/inventory.ts";
+import { searchCatalog, buildSearchQuery } from "../services/catalogSearch.ts";
 import { enqueueAndDebounce } from "../services/messageQueue.ts";
 import { describeProductImage } from "../services/vision.ts";
 import { transcribeAudio } from "../services/audio.ts";
@@ -36,45 +37,71 @@ const logger = createLogger("message-handler");
 // ---------------------------------------------------------------------------
 // Convierte cualquier tipo de mensaje (texto, imagen, audio) en texto plano.
 // Retorna null si el tipo de media no está soportado.
+// Cuando hay una imagen, retorna también el VisionResult estructurado para que
+// buildProductContext decida el camino (directo / catalogSearch / handoff humano).
+
+type ResolvedMessage = { text: string; visionResult?: VisionResult };
+
+/** Converts a VisionResult to a human-readable string for injection into the LLM context. */
+function visionResultToText(result: VisionResult): string {
+  if (result.type === "no_product") return "imagen sin producto identificable";
+  if (result.type === "catalog") {
+    return result.products
+      .map((p) => [p.name, p.reference, p.attributes, p.price].filter(Boolean).join(", "))
+      .join("; ");
+  }
+  // product
+  return [result.name, result.brand, result.reference, result.attributes, result.price]
+    .filter(Boolean)
+    .join(", ");
+}
 
 async function resolveMessageText(
   msg: NormalizedMessage
-): Promise<string | null> {
+): Promise<ResolvedMessage | null> {
   const { text: incomingText, media: incomingMedia, phone } = msg;
 
   if (incomingText && incomingMedia?.type === "image") {
     logger.info("Imagen con texto recibida, procesando con Vision API", { phone, url: incomingMedia.url });
-    const imageDescription = await describeProductImage(incomingMedia.url);
-    logger.info("Imagen con texto procesada", { phone, text: incomingText, description: imageDescription });
-    return `${incomingText}\n[Imagen adjunta: ${imageDescription}]`;
+    const visionResult = await describeProductImage(incomingMedia.url);
+    const description = visionResultToText(visionResult);
+    logger.info("Imagen con texto procesada", { phone, text: incomingText, description });
+    return { text: `${incomingText}\n[Imagen adjunta: ${description}]`, visionResult };
   }
 
   if (incomingText) {
-    return incomingText;
+    return { text: incomingText };
   }
 
   if (incomingMedia?.type === "image") {
     logger.info("Imagen recibida, procesando con Vision API", { phone, url: incomingMedia.url });
-    const description = await describeProductImage(incomingMedia.url);
-    logger.info("Imagen procesada", { phone, description });
+    const visionResult = await describeProductImage(incomingMedia.url);
+    logger.info("Imagen procesada", { phone, type: visionResult.type });
 
-    if (description.trim().toLowerCase() === "imagen sin producto identificable") {
+    if (visionResult.type === "no_product") {
       // Vision couldn't identify a product — give the LLM a clear instruction
-      // instead of a contradictory marker, so it asks for reference/description.
+      // so it asks for reference/description. VisionResult is still threaded through
+      // so buildProductContext can avoid catalog search for this case.
       logger.debug("Vision no identificó producto — usando marker de acción", { phone });
-      return "[El cliente envió una imagen pero no se pudo identificar el producto. Pídele la referencia del catálogo o que describa qué producto busca.]";
+      return {
+        text: "[El cliente envió una imagen pero no se pudo identificar el producto. Pídele la referencia del catálogo o que describa qué producto busca.]",
+        visionResult,
+      };
     }
 
-    // Prefix preserves intent context for the classifier: a user sending an image
-    // is showing product interest, not just describing something.
-    return `[Imagen enviada por el cliente — producto de interés]: ${description}`;
+    const description = visionResultToText(visionResult);
+    // Prefix preserves intent context for the classifier
+    return {
+      text: `[Imagen enviada por el cliente — producto de interés]: ${description}`,
+      visionResult,
+    };
   }
 
   if (incomingMedia?.type === "audio") {
     logger.info("Audio recibido, transcribiendo con Whisper", { phone, url: incomingMedia.url, mime: incomingMedia.mimeType });
     const transcription = await transcribeAudio(incomingMedia.url, incomingMedia.mimeType);
     logger.info("Audio transcrito", { phone, transcription });
-    return transcription;
+    return { text: transcription };
   }
 
   // Video, documento — no soportado aún
@@ -100,17 +127,57 @@ async function buildProductContext(
   clientConfig: ClientConfig,
   lead: Lead,
   phone: string,
-  provider: WhatsAppProvider
+  provider: WhatsAppProvider,
+  visionResult?: VisionResult
 ): Promise<ProductContextResult> {
   if (client.product_mode === "catalog") {
-    if (!client.catalog_url) {
+    // Resolve URLs: new fields take priority over legacy catalog_url
+    const consultUrl = client.consult_catalog_url ?? client.catalog_url;
+    const showUrl    = client.show_catalog_url    ?? client.catalog_url;
+
+    if (!consultUrl && !showUrl) {
       logger.info("Sin URL de catálogo configurada, bot pausado", { leadId: lead.id });
       await pauseLead(lead.id, "no_catalog");
       return { paused: true, reason: "bot_paused:no_catalog" };
     }
-    const inventorySection = buildCatalogSection(client.catalog_url);
-    logger.debug("Contexto de catálogo construido", { catalogUrl: client.catalog_url });
-    return { paused: false, inventorySection };
+
+    // --- Path decision when an image was sent ---
+    if (visionResult?.type === "product") {
+      const { confidence } = visionResult;
+
+      // low confidence → handoff to human
+      if (confidence === "low") {
+        logger.info("Vision con baja confianza — transfiriendo a humano", { leadId: lead.id });
+        await pauseLead(lead.id, "human_takeover");
+        await provider.sendMessage(phone, "No pude identificar bien el producto en la imagen. Un asesor te ayuda enseguida. 📸");
+        return { paused: true, reason: "bot_paused:low_vision_confidence" };
+      }
+
+      // medium confidence + consultUrl → search external catalog
+      if (confidence === "medium" && consultUrl) {
+        const query: string = buildSearchQuery(visionResult);
+        if (query) {
+          logger.debug("Buscando producto en catálogo externo", { query, consultUrl });
+          const found = await searchCatalog(consultUrl, query);
+          if (found.length > 0) {
+            logger.info("Producto encontrado en catálogo externo", { query, results: found.length });
+            return { paused: false, inventorySection: buildCatalogSearchSection(found, showUrl) };
+          }
+          // No match found → handoff to human
+          logger.info("Sin coincidencias en catálogo externo — transfiriendo a humano", { leadId: lead.id, query });
+          await pauseLead(lead.id, "human_takeover");
+          await provider.sendMessage(phone, "Déjame buscar ese producto con un asesor. Te contactamos en breve. 🔍");
+          return { paused: true, reason: "bot_paused:no_catalog_match" };
+        }
+      }
+      // high confidence or medium without consultUrl → fall through to catalog section
+      // (vision description is already embedded in combinedMessage)
+    }
+
+    // Default: inject show catalog URL (text messages, high confidence images, catalog screenshots)
+    const catalogUrl = showUrl ?? consultUrl!;
+    logger.debug("Contexto de catálogo construido", { catalogUrl });
+    return { paused: false, inventorySection: buildCatalogSection(catalogUrl) };
   }
 
   if (!hasProductKeywords(combinedMessage)) {
@@ -318,13 +385,13 @@ export async function handleIncomingMessage(
   }
 
   // 4. Resolver el mensaje a texto (imagen → Vision API, audio → Whisper, etc.)
-  const incomingMessage = await resolveMessageText(msg);
-  if (incomingMessage === null) {
+  const resolved = await resolveMessageText(msg);
+  if (resolved === null) {
     return { ok: true, skipped: true, reason: `unsupported media type: ${incomingMedia?.type}` };
   }
 
   // 5. Debounce: agrupar mensajes rápidos del mismo lead
-  const batchMessages = await enqueueAndDebounce(phone, channelPhone, incomingMessage);
+  const batchMessages = await enqueueAndDebounce(phone, channelPhone, resolved.text);
   if (batchMessages === null) {
     logger.debug("Mensaje agrupado en lote de otro mensaje más reciente", { phone });
     return { ok: true, skipped: true, reason: "debounced" };
@@ -335,11 +402,15 @@ export async function handleIncomingMessage(
   const clientConfig = await getClientConfig(client.id);
 
   // 6b. Sustituir placeholder [URL] del catálogo en el system prompt
-  if (client.product_mode === "catalog" && client.catalog_url) {
-    clientConfig.system_prompt = clientConfig.system_prompt.replaceAll("[URL]", client.catalog_url);
-    logger.debug("Placeholder [URL] sustituido en system prompt", { catalogUrl: client.catalog_url });
-  } else if (client.product_mode === "catalog" && !client.catalog_url) {
-    logger.warn("Modo catálogo sin catalog_url configurada en la DB", { clientId: client.id });
+  // show_catalog_url es el que se muestra al lead; usa catalog_url como fallback
+  if (client.product_mode === "catalog") {
+    const showUrl = client.show_catalog_url ?? client.catalog_url;
+    if (showUrl) {
+      clientConfig.system_prompt = clientConfig.system_prompt.replaceAll("[URL]", showUrl);
+      logger.debug("Placeholder [URL] sustituido en system prompt", { showUrl });
+    } else {
+      logger.warn("Modo catálogo sin show_catalog_url ni catalog_url configurada", { clientId: client.id });
+    }
   }
 
   // 7. Guardar mensajes del lote en historial
@@ -354,7 +425,7 @@ export async function handleIncomingMessage(
 
   // 9. Contexto de producto (catálogo o inventario)
   const productContext = await buildProductContext(
-    client, combinedMessage, history, clientConfig, lead, phone, provider
+    client, combinedMessage, history, clientConfig, lead, phone, provider, resolved.visionResult
   );
   if (productContext.paused) {
     return { ok: true, skipped: true, reason: productContext.reason };

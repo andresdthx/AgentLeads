@@ -45,18 +45,26 @@ export function createMockSupabaseClient() {
 
   return {
     from: (table: string) => ({
-      select: (_columns?: string) => ({
-        eq: (column: string, value: any) => ({
+      select: (_columns?: string) => {
+        const conditions: Array<[string, any]> = [];
+        const builder: any = {
+          eq: (column: string, value: any) => {
+            conditions.push([column, value]);
+            return builder;
+          },
           single: async () => {
-            const item = mockData[table]?.find((item: any) => item[column] === value);
+            const item = mockData[table]?.find((row: any) =>
+              conditions.every(([col, val]) => row[col] === val)
+            );
             return { data: item ?? null, error: null };
           },
-        }),
-        order: (_column: string, _options: any) => ({
-          limit: (limit: number) =>
-            Promise.resolve({ data: (mockData[table] ?? []).slice(0, limit), error: null }),
-        }),
-      }),
+          order: (_column: string, _options: any) => ({
+            limit: (limit: number) =>
+              Promise.resolve({ data: (mockData[table] ?? []).slice(0, limit), error: null }),
+          }),
+        };
+        return builder;
+      },
       insert: (data: any) => {
         const newItem = { ...data, id: data.id ?? crypto.randomUUID() };
         if (!mockData[table]) mockData[table] = [];

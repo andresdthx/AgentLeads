@@ -23,6 +23,8 @@ export interface NormalizedMessage {
     type: NormalizedMediaType;
     mimeType: string;        // e.g. "audio/ogg; codecs=opus"
   };
+  /** Plain text of the message being replied to, if the user quoted a previous message. */
+  quotedText?: string;
 }
 
 /**
@@ -48,6 +50,24 @@ export interface RequestPayload {
       url: string;
       type: string;      // raw 2chat type: 'image' | 'ptt' | 'audio' | 'video' | 'document'
       mime_type: string;
+    };
+    /** Present when the user quotes (replies to) a previous message in WhatsApp. */
+    quoted_msg?: {
+      id: string;
+      session_key: string;
+      message: {
+        text?: string;
+      };
+      created_at: string;
+      remote_phone_number: string;
+      channel_phone_number: string;
+      sent_by: string;
+      contact?: {
+        first_name?: string | null;
+        last_name?: string | null;
+        friendly_name?: string | null;
+        device?: string | null;
+      };
     };
   };
   contact: {
@@ -92,7 +112,9 @@ export interface Client {
   conversation_history_limit: number;
   plan_id?: string;
   product_mode: 'inventory' | 'catalog'; // How products are handled for this client
-  catalog_url?: string | null;           // Required when product_mode = 'catalog'
+  catalog_url?: string | null;           // DEPRECATED — use consult_catalog_url / show_catalog_url
+  consult_catalog_url?: string | null;   // URL the agent queries to search products (WooCommerce, Shopify, etc.)
+  show_catalog_url?: string | null;      // URL shown to the lead when they ask for the catalog
   notification_phone?: string | null;    // Sales agent WhatsApp for hot-lead alerts (intl. format, no +)
 }
 
@@ -138,6 +160,35 @@ export interface Classification {
 export interface LLMMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+// ---------------------------------------------------------------------------
+// Vision Agent — structured output
+// ---------------------------------------------------------------------------
+
+export interface VisionProductData {
+  name: string;
+  brand: string | null;
+  reference: string | null;
+  attributes: string | null; // color, talla, fragancia, material, volumen, etc.
+  price: string | null;
+}
+
+export type VisionResult =
+  | ({ type: "product"; confidence: "high" | "medium" | "low" } & VisionProductData)
+  | { type: "catalog"; products: VisionProductData[] }
+  | { type: "no_product" };
+
+// ---------------------------------------------------------------------------
+// Catalog Search — external e-commerce product
+// ---------------------------------------------------------------------------
+
+export interface CatalogProduct {
+  name: string;
+  price: string | null;
+  url: string | null;
+  available: boolean;
+  description: string | null;
 }
 
 // ---------------------------------------------------------------------------

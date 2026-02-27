@@ -42,7 +42,17 @@
       "Bash(cd /c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads && git remote set-url origin https://github.com/andresdthx/AgentLeads.git && git push origin main 2>&1)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(cmd:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "WebFetch(domain:n9.cl)",
+      "WebSearch",
+      "WebFetch(domain:catalogoslaveleria.my.canva.site)",
+      "WebFetch(domain:www.canva.com)",
+      "WebFetch(domain:laveleriaparafin.com)",
+      "WebFetch(domain:lacolmenabolsos.com)",
+      "Bash(supabase:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 npm run:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 supabase db push --project-ref pgwklddzkizicqigvipf)",
+      "Bash(where supabase)"
     ]
   }
 }

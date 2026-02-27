@@ -2,7 +2,7 @@
 // y construye el bloque de contexto que se inyecta al prompt del LLM.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { ClientProduct, ProductIntent } from "../types/index.ts";
+import type { ClientProduct, ProductIntent, CatalogProduct } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("inventory");
@@ -95,6 +95,33 @@ export function buildCatalogSection(catalogUrl: string): string {
     "Si ya compartiste el catálogo en este chat, no lo vuelvas a enviar — espera la referencia.",
     "---",
   ].join("\n");
+}
+
+/**
+ * Builds a catalog context section from external e-commerce search results.
+ * Used when product_mode = 'catalog' and the vision agent found a product with
+ * medium confidence that was matched in the external catalog.
+ */
+export function buildCatalogSearchSection(
+  products: CatalogProduct[],
+  showCatalogUrl: string | null | undefined
+): string {
+  const lines: string[] = ["--- PRODUCTOS ENCONTRADOS EN CATÁLOGO ---"];
+
+  products.forEach((p, i) => {
+    lines.push(`${i + 1}. ${p.name}`);
+    if (p.price) lines.push(`   Precio: ${p.price}`);
+    lines.push(`   Estado: ${p.available ? "disponible" : "sin existencias"}`);
+    if (p.url)         lines.push(`   Link: ${p.url}`);
+    if (p.description) lines.push(`   Info: ${p.description}`);
+  });
+
+  if (showCatalogUrl) {
+    lines.push(`\nCatálogo completo: ${showCatalogUrl}`);
+  }
+
+  lines.push("---");
+  return lines.join("\n");
 }
 
 /**
