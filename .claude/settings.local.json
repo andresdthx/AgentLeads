@@ -52,7 +52,22 @@
       "Bash(supabase:*)",
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 npm run:*)",
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 supabase db push --project-ref pgwklddzkizicqigvipf)",
-      "Bash(where supabase)"
+      "Bash(where supabase)",
+      "Bash(command -v supabase)",
+      "Bash(python -c \"import sys,json; [print\\(p[''id''], p[''name'']\\) for p in json.load\\(sys.stdin\\)]\")",
+      "Bash(python -c \"import sys,json; keys=json.load\\(sys.stdin\\); [print\\(k[''name''], k[''api_key''][:20]+''...''\\) for k in keys]\")",
+      "Bash(node run_migration.js)",
+      "mcp__ide__getDiagnostics",
+      "Bash(node run_update_prompt.cjs)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 ./node_modules/.bin/supabase projects:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 ./node_modules/.bin/supabase db:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 ./node_modules/.bin/supabase link:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_62dc6cad1a59ac609d921a2085946e3d364f46a0 ./node_modules/.bin/supabase migration:*)",
+      "Read(//c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads/$APPDATA/npm/**)",
+      "Read(//c/Users/andres.canchila_prag/Documents/personal_devs/AgentsLeads/$HOME/.supabase/bin/**)",
+      "Bash(where npx:*)",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:doc-04-28-sheets.googleusercontent.com)"
     ]
   }
 }

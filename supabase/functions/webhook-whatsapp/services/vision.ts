@@ -26,9 +26,9 @@ const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 const VISION_PROMPT_FALLBACK =
   'Analiza esta imagen enviada por un cliente interesado en comprar un producto.\n' +
   'Responde ÚNICAMENTE con JSON válido, sin texto adicional, en uno de estos formatos:\n' +
-  '1. Producto identificable: {"type":"product","name":"","brand":null,"reference":null,"attributes":null,"price":null,"confidence":"high"}\n' +
+  '1. Producto identificable: {"type":"product","name":"","brand":null,"reference":null,"attributes":null,"price_detal":null,"price_mayorista":null,"confidence":"high"}\n' +
   '   confidence: "high"=info completa visible, "medium"=producto reconocible sin texto, "low"=imagen ambigua\n' +
-  '2. Catálogo con múltiples productos: {"type":"catalog","products":[{"name":"","reference":null,"attributes":null,"price":null}]}\n' +
+  '2. Catálogo con múltiples productos: {"type":"catalog","products":[{"name":"","reference":null,"attributes":null,"price_detal":null,"price_mayorista":null}]}\n' +
   '3. Sin producto identificable: {"type":"no_product"}';
 
 // Cache con TTL — se invalida cada 5 min para que cambios en agent_prompts se reflejen sin reiniciar
@@ -167,24 +167,26 @@ function parseVisionResponse(raw: string): VisionResult {
 
     if (parsed.type === "catalog" && Array.isArray(parsed.products)) {
       const products: VisionProductData[] = parsed.products.map((p: Record<string, unknown>) => ({
-        name:       String(p.name ?? ""),
-        brand:      p.brand      ? String(p.brand)      : null,
-        reference:  p.reference  ? String(p.reference)  : null,
-        attributes: flattenAttributes(p.attributes),
-        price:      p.price      ? String(p.price)      : null,
+        name:            String(p.name ?? ""),
+        brand:           p.brand           ? String(p.brand)           : null,
+        reference:       p.reference       ? String(p.reference)       : null,
+        attributes:      flattenAttributes(p.attributes),
+        price_detal:     p.price_detal     ? String(p.price_detal)     : null,
+        price_mayorista: p.price_mayorista ? String(p.price_mayorista) : null,
       }));
       return { type: "catalog", products };
     }
 
     if (parsed.type === "product" && parsed.name) {
       return {
-        type:       "product",
-        name:       String(parsed.name),
-        brand:      parsed.brand      ? String(parsed.brand)      : null,
-        reference:  parsed.reference  ? String(parsed.reference)  : null,
-        attributes: flattenAttributes(parsed.attributes),
-        price:      parsed.price      ? String(parsed.price)      : null,
-        confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "medium",
+        type:            "product",
+        name:            String(parsed.name),
+        brand:           parsed.brand           ? String(parsed.brand)           : null,
+        reference:       parsed.reference       ? String(parsed.reference)       : null,
+        attributes:      flattenAttributes(parsed.attributes),
+        price_detal:     parsed.price_detal     ? String(parsed.price_detal)     : null,
+        price_mayorista: parsed.price_mayorista ? String(parsed.price_mayorista) : null,
+        confidence:      ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "medium",
       };
     }
   } catch {
@@ -198,12 +200,13 @@ function parseVisionResponse(raw: string): VisionResult {
 
   // Wrap free-text description as medium-confidence product
   return {
-    type: "product",
-    name: raw.slice(0, 200),
-    brand: null,
-    reference: null,
-    attributes: null,
-    price: null,
-    confidence: "medium",
+    type:            "product",
+    name:            raw.slice(0, 200),
+    brand:           null,
+    reference:       null,
+    attributes:      null,
+    price_detal:     null,
+    price_mayorista: null,
+    confidence:      "medium",
   };
 }

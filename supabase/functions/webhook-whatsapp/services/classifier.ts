@@ -12,11 +12,17 @@
 // fallo en la clasificación nunca afecta la experiencia del usuario.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Message, Classification, ClientConfig } from "../types/index.ts";
+import type { Message, Classification } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 import { resolveApiKey } from "./llm.ts";
 
 const logger = createLogger("classifier");
+
+// Hardcoded to OpenAI gpt-4o-mini for cost efficiency.
+// Classification requires structured JSON output, not prose — gpt-4o-mini is sufficient.
+// Using the client's plan model here would create unexpected billing on Pro plans.
+const CLASSIFIER_MODEL = "gpt-4o-mini";
+const CLASSIFIER_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -47,7 +53,9 @@ async function getClassifierPrompt(): Promise<string | null> {
     .eq("agent_type", "classifier")
     .eq("is_active", true)
     .is("client_id", null)
-    .single();
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data?.content) {
     logger.warn("No se encontró classifier prompt en agent_prompts — clasificación omitida", { error });
@@ -65,7 +73,7 @@ async function getClassifierPrompt(): Promise<string | null> {
 const FALLBACK_CLASSIFICATION: Classification = {
   score: 0,
   classification: "cold",
-  extracted: { need: null, customer_type: null, budget: null, timeline: null },
+  extracted: { need: null, customer_type: null, budget: null, timeline: null, productos_mencionados: [], objecciones_detectadas: [], venta_cruzada_oportunidad: false },
   reasoning: "fallback — clasificación no disponible",
 };
 
@@ -79,8 +87,7 @@ const FALLBACK_CLASSIFICATION: Classification = {
  * Nunca lanza excepción — retorna FALLBACK_CLASSIFICATION si algo falla.
  */
 export async function classifyConversation(
-  history: Message[],
-  config: ClientConfig
+  history: Message[]
 ): Promise<Classification> {
   if (history.length === 0) {
     logger.debug("Historial vacío, retornando clasificación cold");
@@ -101,23 +108,20 @@ export async function classifyConversation(
     },
   ];
 
-  const apiKey = resolveApiKey(config.llm.provider_slug);
-
-  const authHeader = config.llm.api_key_prefix
-    ? `${config.llm.api_key_prefix} ${apiKey}`
-    : apiKey;
+  const apiKey = resolveApiKey("openai");
+  const authHeader = `Bearer ${apiKey}`;
 
   // raw declarado fuera del try para ser accesible en el catch (útil al logear fallos de JSON.parse)
   let raw = "";
   try {
-    const response = await fetch(config.llm.chat_endpoint_url, {
+    const response = await fetch(CLASSIFIER_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        [config.llm.api_key_header]: authHeader,
+        "Authorization": authHeader,
       },
       body: JSON.stringify({
-        model: config.llm.model_id,
+        model: CLASSIFIER_MODEL,
         messages,
         temperature: 0,       // Determinista — sin creatividad
         max_tokens: 400,

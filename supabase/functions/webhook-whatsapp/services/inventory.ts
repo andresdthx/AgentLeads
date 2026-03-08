@@ -18,28 +18,59 @@ const MAX_PRODUCTS_IN_CONTEXT = 8;
 /**
  * Consulta los productos del cliente filtrando por la intención extraída.
  * Siempre ordena: available → low_stock → out_of_stock.
+ * Los filtros se aplican solo cuando el campo tiene valor — compatible con cualquier
+ * tipo de negocio (productos físicos, servicios, insumos, etc.).
  */
 export async function queryInventory(
   clientId: string,
   intent: ProductIntent
 ): Promise<ClientProduct[]> {
+  // Registrar qué filtros se van a aplicar antes de ejecutar la query
+  const appliedFilters: Record<string, unknown> = {};
+
   let query = supabase
     .from("client_products")
     .select("*")
     .eq("client_id", clientId)
     .eq("is_active", true);
 
-  if (intent.brand) {
-    query = query.ilike("brand", `%${intent.brand}%`);
+  // OR across all detected brands (e.g. ["Nike", "Adidas"] → brand ilike %Nike% OR brand ilike %Adidas%)
+  if (intent.brands.length > 0) {
+    const brandFilters = intent.brands.map((b) => `brand.ilike.%${b}%`).join(",");
+    query = query.or(brandFilters);
+    appliedFilters.brands = intent.brands;
   }
 
   if (intent.model) {
     query = query.ilike("model", `%${intent.model}%`);
+    appliedFilters.model = intent.model;
   }
 
+  // Specific product reference (high-precision match, used when brand/model hierarchy is absent)
+  if (intent.reference) {
+    query = query.ilike("name", `%${intent.reference}%`);
+    appliedFilters.reference = intent.reference;
+  }
+
+  // Category filter
+  if (intent.category) {
+    query = query.ilike("category", `%${intent.category}%`);
+    appliedFilters.category = intent.category;
+  }
+
+  // Sizes: only applied when the intent has sizes AND the client uses size-based products.
+  // Skipping when empty avoids filtering out non-sized items (services, supplies, etc.)
   if (intent.sizes.length > 0) {
     query = query.overlaps("available_sizes", intent.sizes);
+    appliedFilters.sizes = intent.sizes;
   }
+
+  logger.debug("Ejecutando query de inventario", {
+    clientId,
+    intent_type: intent.intent_type,
+    confidence: intent.confidence,
+    filters: Object.keys(appliedFilters).length > 0 ? appliedFilters : "ninguno (búsqueda amplia)",
+  });
 
   query = query
     .order("stock_status", { ascending: true })
@@ -48,16 +79,31 @@ export async function queryInventory(
   const { data, error } = await query;
 
   if (error) {
-    logger.error("Error consultando inventario", { clientId, intent, error });
+    logger.error("Error consultando inventario", { clientId, filters: appliedFilters, error });
     return [];
   }
 
-  logger.debug("Productos encontrados", {
-    clientId,
-    count: data?.length ?? 0,
-    brand: intent.brand,
-    model: intent.model,
-  });
+  const count = data?.length ?? 0;
+
+  if (count === 0) {
+    logger.info("Inventario sin resultados para los filtros aplicados", {
+      clientId,
+      filters: appliedFilters,
+      suggestion: Object.keys(appliedFilters).length > 0
+        ? "Considerar ampliar la búsqueda o revisar datos del inventario"
+        : "El cliente no tiene productos activos",
+    });
+  } else {
+    logger.info("Productos encontrados en inventario", {
+      clientId,
+      count,
+      filters: appliedFilters,
+      stock_summary: (data ?? []).reduce((acc: Record<string, number>, p: ClientProduct) => {
+        acc[p.stock_status] = (acc[p.stock_status] ?? 0) + 1;
+        return acc;
+      }, {}),
+    });
+  }
 
   return (data ?? []) as ClientProduct[];
 }
@@ -77,40 +123,43 @@ export async function clientHasCatalog(clientId: string): Promise<boolean> {
     return false;
   }
 
-  return (count ?? 0) > 0;
+  const hasCatalog = (count ?? 0) > 0;
+  logger.debug("Verificación de catálogo", { clientId, hasCatalog, total_active: count ?? 0 });
+  return hasCatalog;
 }
 
 /**
  * Construye el bloque de contexto de catálogo para inyectar en el system prompt.
- * Usado cuando product_mode = 'catalog'.
+ * Usado cuando capabilities.catalog = true y no hay resultados de búsqueda específicos.
  * El LLM decide cuándo compartir el enlace según el historial de conversación.
+ * Copy genérico — válido para productos físicos y servicios.
  */
 export function buildCatalogSection(catalogUrl: string): string {
   return [
-    "--- CATÁLOGO DE PRODUCTOS ---",
+    "--- CATÁLOGO ---",
     `URL del catálogo: ${catalogUrl}`,
-    `Cada vez que debas compartir el catálogo, usa exactamente esta URL: ${catalogUrl}`,
-    "Cuando el cliente pregunte por productos, precios o imágenes, comparte este enlace.",
-    "Después de compartirlo, pídele la referencia específica que le interesó para confirmar disponibilidad y precio.",
-    "Si ya compartiste el catálogo en este chat, no lo vuelvas a enviar — espera la referencia.",
+    `Cuando debas compartir el catálogo, usa exactamente esta URL: ${catalogUrl}`,
+    "Cuando el cliente pregunte por productos, servicios, precios o imágenes, comparte este enlace.",
+    "Después de compartirlo, pídele que te indique qué le interesó para confirmar disponibilidad y precio.",
+    "Si ya compartiste el catálogo en este chat, no lo vuelvas a enviar — espera la respuesta del cliente.",
     "---",
   ].join("\n");
 }
 
 /**
- * Builds a catalog context section from external e-commerce search results.
- * Used when product_mode = 'catalog' and the vision agent found a product with
- * medium confidence that was matched in the external catalog.
+ * Builds a context section from external catalog search results (Shopify, WooCommerce,
+ * Google Sheets, etc.). Generic — valid for physical products and services alike.
+ * Used in catalog mode when a specific match was found via searchCatalog().
  */
 export function buildCatalogSearchSection(
   products: CatalogProduct[],
   showCatalogUrl: string | null | undefined
 ): string {
-  const lines: string[] = ["--- PRODUCTOS ENCONTRADOS EN CATÁLOGO ---"];
+  const lines: string[] = ["--- RESULTADOS DEL CATÁLOGO ---"];
 
   products.forEach((p, i) => {
     lines.push(`${i + 1}. ${p.name}`);
-    if (p.price) lines.push(`   Precio: ${p.price}`);
+    if (p.price)       lines.push(`   Precio: ${p.price}`);
     lines.push(`   Estado: ${p.available ? "disponible" : "sin existencias"}`);
     if (p.url)         lines.push(`   Link: ${p.url}`);
     if (p.description) lines.push(`   Info: ${p.description}`);
@@ -127,6 +176,8 @@ export function buildCatalogSearchSection(
 /**
  * Formatea los productos en un bloque de texto estructurado para inyectar
  * en el system prompt del LLM.
+ * Adaptativo: solo muestra los campos que tienen datos — válido para productos
+ * físicos (marca/modelo/tallas), servicios (categoría/descripción) e insumos.
  */
 export function buildInventorySection(products: ClientProduct[]): string {
   if (products.length === 0) return "";
@@ -141,9 +192,14 @@ export function buildInventorySection(products: ClientProduct[]): string {
 
   products.forEach((p, i) => {
     lines.push(`${i + 1}. ${p.name}`);
-    lines.push(
-      `   Marca: ${p.brand ?? "—"} | Modelo: ${p.model ?? "—"} | Estado: ${statusLabel[p.stock_status] ?? p.stock_status}`
-    );
+
+    // Build the metadata line with only non-null fields
+    const meta: string[] = [];
+    if (p.brand)    meta.push(`Marca: ${p.brand}`);
+    if (p.model)    meta.push(`Modelo: ${p.model}`);
+    if (p.category) meta.push(`Categoría: ${p.category}`);
+    meta.push(`Estado: ${statusLabel[p.stock_status] ?? p.stock_status}`);
+    lines.push(`   ${meta.join(" | ")}`);
 
     if (p.available_sizes.length > 0) {
       lines.push(`   Tallas: ${p.available_sizes.join(", ")}`);

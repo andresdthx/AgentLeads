@@ -7,6 +7,7 @@
 import type { WhatsAppProvider } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 import { fetchWithTimeout } from "../utils/security.ts";
+import { config } from "../config.ts";
 
 const logger = createLogger("provider:twochat");
 
@@ -14,9 +15,9 @@ const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 1000; // 1s → 2s → 4s
 
 export function createTwochatProvider(fromNumber: string): WhatsAppProvider {
-  const apiKey = Deno.env.get("TWOCHAT_API_KEY")!;
-  const baseUrl = Deno.env.get("WPP_ORQUESTER_PROVIDER_URL")!;
-  const path = Deno.env.get("WPP_ORQUESTER_PROVIDER_PATH")!;
+  const apiKey = config.TWOCHAT_API_KEY;
+  const baseUrl = config.WPP_ORQUESTER_PROVIDER_URL;
+  const path    = config.WPP_ORQUESTER_PROVIDER_PATH;
 
   return {
     async sendMessage(to: string, text: string): Promise<void> {

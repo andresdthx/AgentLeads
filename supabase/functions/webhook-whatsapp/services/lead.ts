@@ -1,7 +1,7 @@
 // Lead service - handles lead creation and updates
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Lead, Classification, OrderData, BotPausedReason } from "../types/index.ts";
+import type { Lead, OrderData, ReservationData, BotPausedReason, HandoffMode } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("lead");
@@ -67,40 +67,6 @@ export async function getOrCreateLead(
 }
 
 /**
- * Update lead with classification data
- */
-export async function updateLeadClassification(
-  leadId: string,
-  classification: Classification,
-  additionalExtracted?: Record<string, unknown>
-): Promise<void> {
-  const extracted = {
-    ...classification.extracted,
-    ...(additionalExtracted ?? {}),
-  };
-  const { error } = await supabase
-    .from("leads")
-    .update({
-      classification: classification.classification,
-      score: classification.score,
-      extracted_data: extracted,
-    })
-    .eq("id", leadId);
-
-  if (error) {
-    logger.error("Error actualizando clasificación del lead", { leadId, error });
-    throw error;
-  }
-
-  logger.info("Clasificación actualizada", {
-    leadId,
-    classification: classification.classification,
-    score: classification.score,
-    reasoning: classification.reasoning,
-  });
-}
-
-/**
  * Guarda los datos del pedido confirmado en el lead.
  */
 export async function saveOrderData(
@@ -123,37 +89,38 @@ export async function saveOrderData(
   logger.info("Pedido confirmado guardado", { leadId, orderData });
 }
 
-/**
- * Reactiva el bot para un lead — el humano devuelve el control.
- * La nota de handoff la inserta la RPC toggle_bot_pause (migración 027).
- * No llamar saveHandoffNote() aquí para evitar duplicar la nota en el historial.
- */
-export async function resumeLead(leadId: string): Promise<void> {
-  const { error } = await supabase
-    .from("leads")
-    .update({
-      bot_paused: false,
-      bot_paused_reason: null,
-      resumed_at: new Date().toISOString(),
-      status: "bot_active",
-    })
-    .eq("id", leadId);
-
-  if (error) {
-    logger.error("Error reactivando bot del lead", { leadId, error });
-    throw error;
-  }
-
-  logger.info("Bot reactivado", { leadId });
-}
+/** Maps each BotPausedReason to its semantic HandoffMode. */
+const REASON_TO_HANDOFF_MODE: Record<BotPausedReason, HandoffMode> = {
+  // Technical — automatic system pause, low urgency
+  "no_catalog":            "technical",
+  "out_of_stock":          "technical",
+  "config_error":          "technical",
+  // Requested — explicit handoff, human should attend
+  "needs_images":          "requested",
+  "vision_low_conf":       "requested",
+  "no_catalog_match":      "requested",
+  "llm_handoff":           "requested",
+  // Urgent — immediate human action required
+  "order_confirmed":       "urgent",
+  "reservation_confirmed": "urgent",
+  "llm_handoff_urgent":    "urgent",
+  // Deprecated — backward compat with existing DB rows
+  "human_takeover":        "requested",
+  "domicilio_exception":   "requested",
+};
 
 /**
- * Pausa el bot para un lead — el humano toma control.
+ * Pausa el bot para un lead y registra el handoff_mode semántico.
+ * Retorna el HandoffMode resuelto para que el caller decida si notificar.
+ *
+ * Reemplaza a pauseLead(). Use pauseLead() solo en código legado.
  */
-export async function pauseLead(
+export async function pauseLeadWithHandoff(
   leadId: string,
-  reason: BotPausedReason
-): Promise<void> {
+  reason: BotPausedReason,
+  handoffReason?: string
+): Promise<HandoffMode> {
+  const handoffMode = REASON_TO_HANDOFF_MODE[reason] ?? "requested";
   const status = reason === "order_confirmed" ? "resolved" : "human_active";
 
   const { error } = await supabase
@@ -163,13 +130,27 @@ export async function pauseLead(
       bot_paused_at: new Date().toISOString(),
       bot_paused_reason: reason,
       status,
+      handoff_mode: handoffMode,
+      handoff_reason: handoffReason ?? null,
     })
     .eq("id", leadId);
 
   if (error) {
-    logger.error("Error pausando bot del lead", { leadId, reason, error });
+    logger.error("Error pausando bot del lead", { leadId, reason, handoffMode, error });
     throw error;
   }
 
-  logger.info("Bot pausado — humano en control", { leadId, reason, status });
+  logger.info("Bot pausado — humano en control", { leadId, reason, handoffMode, status });
+  return handoffMode;
+}
+
+/**
+ * @deprecated Usar pauseLeadWithHandoff() — no registra handoff_mode en BD.
+ * Mantenido como wrapper para backward compat.
+ */
+export async function pauseLead(
+  leadId: string,
+  reason: BotPausedReason
+): Promise<void> {
+  await pauseLeadWithHandoff(leadId, reason);
 }

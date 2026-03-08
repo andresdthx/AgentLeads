@@ -21,8 +21,13 @@ export const config = {
   WHATSAPP_PROVIDER: Deno.env.get("WHATSAPP_PROVIDER") ?? "2chat",
   TWOCHAT_API_KEY: Deno.env.get("TWOCHAT_API_KEY") ?? "",
   TWOCHAT_API_URL: Deno.env.get("TWOCHAT_API_URL") ?? "https://api.2chat.io",
+  WPP_ORQUESTER_PROVIDER_URL:  requireEnv("WPP_ORQUESTER_PROVIDER_URL"),
+  WPP_ORQUESTER_PROVIDER_PATH: requireEnv("WPP_ORQUESTER_PROVIDER_PATH"),
 
   // LLM
   // LLM_API_KEY_<PROVIDER> tiene precedencia sobre LLM_API_KEY (genérico)
   LLM_API_KEY: Deno.env.get("LLM_API_KEY") ?? "",
+
+  // Catalog — Google Sheets (opcional: solo requerido si el Sheet no es público)
+  GOOGLE_SHEETS_API_KEY: Deno.env.get("GOOGLE_SHEETS_API_KEY") ?? "",
 } as const;

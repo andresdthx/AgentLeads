@@ -56,7 +56,8 @@ const shouldMatch: Array<[string, string]> = [
 
 for (const [keyword, phrase] of shouldMatch) {
   Deno.test(`hasProductKeywords - detecta '${keyword}': "${phrase}"`, () => {
-    assertEquals(hasProductKeywords(phrase), true);
+    assertEquals(hasProductKeywords(phrase), true);          // sin keywords → fallback global
+    assertEquals(hasProductKeywords(phrase, []), true);      // array vacío → fallback global
   });
 }
 
@@ -77,7 +78,8 @@ const shouldNotMatch: Array<[string, string]> = [
 
 for (const [desc, phrase] of shouldNotMatch) {
   Deno.test(`hasProductKeywords - no detecta intención en '${desc}': "${phrase}"`, () => {
-    assertEquals(hasProductKeywords(phrase), false);
+    assertEquals(hasProductKeywords(phrase), false);         // sin keywords → fallback global
+    assertEquals(hasProductKeywords(phrase, []), false);     // array vacío → fallback global
   });
 }
 
@@ -103,4 +105,28 @@ Deno.test("hasProductKeywords - detecta 'catálogo' con tilde", () => {
 
 Deno.test("hasProductKeywords - detecta 'catalogo' sin tilde", () => {
   assertEquals(hasProductKeywords("mandame el catalogo"), true);
+});
+
+// ---------------------------------------------------------------------------
+// Override por cliente (migration 045)
+// ---------------------------------------------------------------------------
+
+Deno.test("hasProductKeywords - override de cliente detecta keyword personalizada", () => {
+  // Negocio de masajes: la regex global no detecta "masaje"
+  assertEquals(hasProductKeywords("quiero un masaje relajante", []), false);
+  // Con el override del cliente sí lo detecta
+  assertEquals(hasProductKeywords("quiero un masaje relajante", ["masaje", "servicio", "reserva"]), true);
+});
+
+Deno.test("hasProductKeywords - override de cliente es case-insensitive", () => {
+  assertEquals(hasProductKeywords("RESERVAR TURNO", ["masaje", "reservar", "turno"]), true);
+});
+
+Deno.test("hasProductKeywords - override de cliente no activa falsos positivos", () => {
+  assertEquals(hasProductKeywords("hola buenas", ["masaje", "servicio", "reserva"]), false);
+});
+
+Deno.test("hasProductKeywords - override de cliente: saludo no activa cuando keywords son específicas", () => {
+  // La palabra "ver" está en el fallback global pero no en este override específico
+  assertEquals(hasProductKeywords("quiero ver el menú", ["masaje", "precio", "reservar"]), false);
 });

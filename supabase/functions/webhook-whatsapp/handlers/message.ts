@@ -10,27 +10,57 @@
 // Cada función de pipeline tiene una sola responsabilidad. El orquestador
 // solo toma decisiones de alto nivel y delega la ejecución a los pipelines.
 
-import type { NormalizedMessage, WhatsAppProvider, Lead, Client, ClientConfig, OrderData, Message, Classification, VisionResult } from "../types/index.ts";
+import type { NormalizedMessage, WhatsAppProvider, Lead, Client, ClientConfig, OrderData, ReservationData, HandoffData, BotPausedReason, Message, Classification, ExtractedData, VisionResult } from "../types/index.ts";
 
-import { getOrCreateLead, saveOrderData, pauseLead } from "../services/lead.ts";
-import { notifyHotLead } from "../services/notification.ts";
+import { getOrCreateLead, saveOrderData, pauseLeadWithHandoff } from "../services/lead.ts";
+import { notifyHotLead, notifyHandoff } from "../services/notification.ts";
 import { classifyConversation } from "../services/classifier.ts";
 import {
   saveUserMessage,
   saveBotResponse,
   getConversationHistory,
+  getConversationHistoryLength,
 } from "../services/conversation.ts";
 import { generateResponse } from "../services/llm.ts";
 import { getClientConfig, getClientByChannelPhone } from "../services/client.ts";
 import { hasProductKeywords, extractProductIntent } from "../services/intent.ts";
 import { queryInventory, clientHasCatalog, buildInventorySection, buildCatalogSection, buildCatalogSearchSection } from "../services/inventory.ts";
-import { searchCatalog, buildSearchQuery } from "../services/catalogSearch.ts";
+import { searchCatalog, buildSearchQuery, fetchAllServices, buildServicesContextBlock } from "../services/catalogSearch.ts";
 import { enqueueAndDebounce } from "../services/messageQueue.ts";
 import { describeProductImage } from "../services/vision.ts";
 import { transcribeAudio } from "../services/audio.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("message-handler");
+
+// ---------------------------------------------------------------------------
+// Helper: pausar lead + notificar al agente si corresponde
+// ---------------------------------------------------------------------------
+// Centraliza la lógica de "¿debo notificar?" para todos los puntos de pausa.
+// - urgent    → siempre notifica (si hay notificationPhone)
+// - requested → notifica solo si notifyOnRequested = true (config del cliente)
+// - technical → nunca notifica
+// El caller es responsable de enviar el mensaje al lead ANTES de llamar esta función.
+
+async function pauseAndMaybeNotify(
+  leadId: string,
+  leadPhone: string,
+  reason: BotPausedReason,
+  notificationPhone: string | null | undefined,
+  notifyOnRequested: boolean,
+  provider: WhatsAppProvider,
+  handoffReason?: string
+): Promise<void> {
+  const handoffMode = await pauseLeadWithHandoff(leadId, reason, handoffReason);
+  const shouldNotify =
+    handoffMode === "urgent" ||
+    (handoffMode === "requested" && notifyOnRequested);
+
+  if (shouldNotify && notificationPhone) {
+    // fire-and-forget — notification failure never blocks the main flow
+    notifyHandoff(provider, notificationPhone, leadPhone, leadId, handoffMode, handoffReason);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Pipeline: resolución de texto
@@ -45,13 +75,21 @@ type ResolvedMessage = { text: string; visionResult?: VisionResult };
 /** Converts a VisionResult to a human-readable string for injection into the LLM context. */
 function visionResultToText(result: VisionResult): string {
   if (result.type === "no_product") return "imagen sin producto identificable";
+
+  function priceLabel(p: { price_detal: string | null; price_mayorista: string | null }): string | null {
+    const parts: string[] = [];
+    if (p.price_detal)     parts.push(`precio detal: ${p.price_detal}`);
+    if (p.price_mayorista) parts.push(`precio mayorista: ${p.price_mayorista}`);
+    return parts.length ? parts.join(" / ") : null;
+  }
+
   if (result.type === "catalog") {
     return result.products
-      .map((p) => [p.name, p.reference, p.attributes, p.price].filter(Boolean).join(", "))
+      .map((p) => [p.name, p.reference, p.attributes, priceLabel(p)].filter(Boolean).join(", "))
       .join("; ");
   }
   // product
-  return [result.name, result.brand, result.reference, result.attributes, result.price]
+  return [result.name, result.brand, result.reference, result.attributes, priceLabel(result)]
     .filter(Boolean)
     .join(", ");
 }
@@ -112,7 +150,7 @@ async function resolveMessageText(
 // ---------------------------------------------------------------------------
 // Pipeline: contexto de producto
 // ---------------------------------------------------------------------------
-// Decide si inyectar contexto de catálogo o inventario al LLM según product_mode.
+// Decide si inyectar contexto de catálogo o inventario al LLM según capabilities.
 // Retorna el bloque de contexto y los datos de intent extraídos (si aplica).
 // Puede pausar el bot y retornar una señal de "pausa" al orquestador.
 
@@ -130,14 +168,15 @@ async function buildProductContext(
   provider: WhatsAppProvider,
   visionResult?: VisionResult
 ): Promise<ProductContextResult> {
-  if (client.product_mode === "catalog") {
-    // Resolve URLs: new fields take priority over legacy catalog_url
-    const consultUrl = client.consult_catalog_url ?? client.catalog_url;
-    const showUrl    = client.show_catalog_url    ?? client.catalog_url;
+  const capabilities = clientConfig.capabilities;
+
+  if (capabilities.catalog) {
+    const consultUrl = client.consult_catalog_url;
+    const showUrl    = client.show_catalog_url;
 
     if (!consultUrl && !showUrl) {
       logger.info("Sin URL de catálogo configurada, bot pausado", { leadId: lead.id });
-      await pauseLead(lead.id, "no_catalog");
+      await pauseAndMaybeNotify(lead.id, phone, "no_catalog", client.notification_phone, client.notify_on_handoff_requested ?? false, provider);
       return { paused: true, reason: "bot_paused:no_catalog" };
     }
 
@@ -148,9 +187,9 @@ async function buildProductContext(
       // low confidence → handoff to human
       if (confidence === "low") {
         logger.info("Vision con baja confianza — transfiriendo a humano", { leadId: lead.id });
-        await pauseLead(lead.id, "human_takeover");
         await provider.sendMessage(phone, "No pude identificar bien el producto en la imagen. Un asesor te ayuda enseguida. 📸");
-        return { paused: true, reason: "bot_paused:low_vision_confidence" };
+        await pauseAndMaybeNotify(lead.id, phone, "vision_low_conf", client.notification_phone, client.notify_on_handoff_requested ?? false, provider);
+        return { paused: true, reason: "bot_paused:vision_low_conf" };
       }
 
       // medium confidence + consultUrl → search external catalog
@@ -165,8 +204,8 @@ async function buildProductContext(
           }
           // No match found → handoff to human
           logger.info("Sin coincidencias en catálogo externo — transfiriendo a humano", { leadId: lead.id, query });
-          await pauseLead(lead.id, "human_takeover");
           await provider.sendMessage(phone, "Déjame buscar ese producto con un asesor. Te contactamos en breve. 🔍");
+          await pauseAndMaybeNotify(lead.id, phone, "no_catalog_match", client.notification_phone, client.notify_on_handoff_requested ?? false, provider);
           return { paused: true, reason: "bot_paused:no_catalog_match" };
         }
       }
@@ -174,13 +213,45 @@ async function buildProductContext(
       // (vision description is already embedded in combinedMessage)
     }
 
-    // Default: inject show catalog URL (text messages, high confidence images, catalog screenshots)
+    // PATH 0: prompt-driven full-catalog injection via {{SERVICIOS_INYECTADOS}} placeholder.
+    // For service catalogs (masajes, clases, etc.) where ALL services must be in context on
+    // every turn — not just when keywords are detected.
+    // Runs after vision decisions so low/medium-confidence image handoffs still apply.
+    if (consultUrl && clientConfig.system_prompt.includes("{{SERVICIOS_INYECTADOS}}")) {
+      logger.debug("Placeholder {{SERVICIOS_INYECTADOS}} detectado — cargando todos los servicios", { consultUrl });
+      const rows = await fetchAllServices(consultUrl);
+      if (rows.length > 0) {
+        logger.info("Servicios cargados para inyección en placeholder", { count: rows.length });
+        return { paused: false, inventorySection: buildServicesContextBlock(rows, clientConfig.catalogConfig) };
+      }
+      logger.warn("fetchAllServices retornó vacío — cayendo a path normal", { consultUrl });
+    }
+
+    // PATH 2: text message with product keywords → search external catalog
+    // Applies to service businesses (masajes, clases, etc.) where text queries need a real lookup.
+    if (consultUrl && hasProductKeywords(combinedMessage, clientConfig.keywords)) {
+      const searchQuery = combinedMessage.slice(0, 150);
+      logger.debug("Keywords detectadas en catalog mode — buscando en catálogo externo", { searchQuery, consultUrl });
+      const found = await searchCatalog(consultUrl, searchQuery);
+      if (found.length > 0) {
+        logger.info("Producto/servicio encontrado en catálogo externo (texto)", { results: found.length });
+        return { paused: false, inventorySection: buildCatalogSearchSection(found, showUrl) };
+      }
+      // No match → fall through to show catalog URL
+      logger.debug("Sin coincidencias en catálogo externo para texto — mostrando URL");
+    }
+
+    // Default: show catalog URL (no keywords, high confidence images, catalog screenshots, no results)
     const catalogUrl = showUrl ?? consultUrl!;
     logger.debug("Contexto de catálogo construido", { catalogUrl });
     return { paused: false, inventorySection: buildCatalogSection(catalogUrl) };
   }
 
-  if (!hasProductKeywords(combinedMessage)) {
+  if (!capabilities.inventory) {
+    return { paused: false, inventorySection: "" };
+  }
+
+  if (!hasProductKeywords(combinedMessage, clientConfig.keywords)) {
     return { paused: false, inventorySection: "" };
   }
 
@@ -194,8 +265,10 @@ async function buildProductContext(
 
   const productIntentData: Record<string, unknown> = {
     product_intent: {
-      brand: intent.brand,
+      brands: intent.brands,
       model: intent.model,
+      reference: intent.reference,
+      category: intent.category,
       customer_type: intent.customer_type,
       confidence: intent.confidence,
     },
@@ -204,22 +277,22 @@ async function buildProductContext(
   const hasCatalog = await clientHasCatalog(client.id);
   if (!hasCatalog) {
     logger.info("Sin productos en inventario, bot pausado", { leadId: lead.id });
-    await pauseLead(lead.id, "no_catalog");
+    await pauseAndMaybeNotify(lead.id, phone, "no_catalog", client.notification_phone, client.notify_on_handoff_requested ?? false, provider);
     return { paused: true, reason: "bot_paused:no_catalog" };
   }
 
   if (intent.needs_images) {
     logger.info("Cliente solicita imágenes, bot pausado", { leadId: lead.id });
-    await pauseLead(lead.id, "needs_images");
     await provider.sendMessage(phone, "Enseguida te paso las fotos. Un asesor te atenderá en un momento. 📸");
+    await pauseAndMaybeNotify(lead.id, phone, "needs_images", client.notification_phone, client.notify_on_handoff_requested ?? false, provider);
     return { paused: true, reason: "bot_paused:needs_images" };
   }
 
   const products = await queryInventory(client.id, intent);
   if (products.length === 0) {
     logger.info("Sin stock para la consulta, bot pausado", { leadId: lead.id, intent });
-    await pauseLead(lead.id, "out_of_stock");
     await provider.sendMessage(phone, "Déjame verificar disponibilidad. Un asesor te confirma en breve. 🔍");
+    await pauseAndMaybeNotify(lead.id, phone, "out_of_stock", client.notification_phone, client.notify_on_handoff_requested ?? false, provider);
     return { paused: true, reason: "bot_paused:out_of_stock" };
   }
 
@@ -239,21 +312,40 @@ async function persistAndRespond(
   phone: string,
   response: string,
   orderData: OrderData | null,
+  reservationData: ReservationData | null,
+  handoffData: HandoffData | null,
   provider: WhatsAppProvider,
   classification: Classification | null,
   productIntentData: Record<string, unknown> | undefined,
-  notificationPhone: string | null | undefined
+  notificationPhone: string | null | undefined,
+  notifyOnRequested: boolean
 ): Promise<void> {
+  // Si el agente confirmó una compra o reserva, el lead es implícitamente hot.
+  // Esto corrige el caso donde maybeClassify fue omitida por la gate de frecuencia
+  // justo en el turno donde el cliente expresó intención de compra/agendamiento.
+  const hasConversion = orderData !== null || reservationData !== null;
+  const effectiveClassification: Classification | null =
+    hasConversion && classification?.classification !== "hot"
+      ? {
+          score: 100,
+          classification: "hot",
+          extracted: classification?.extracted ?? {} as ExtractedData,
+          reasoning: orderData
+            ? "Pedido confirmado por el agente — lead promovido a hot automáticamente"
+            : "Reserva confirmada por el agente — lead promovido a hot automáticamente",
+        }
+      : classification;
+
   // Construir payload de clasificación para la RPC (si aplica).
   // productIntentData ya tiene la forma { product_intent: {...} } — no re-envolver.
-  const classificationPayload = classification ? {
-    score: classification.score,
-    classification: classification.classification,
+  const classificationPayload = effectiveClassification ? {
+    score: effectiveClassification.score,
+    classification: effectiveClassification.classification,
     extracted_data: {
-      ...classification.extracted,
+      ...effectiveClassification.extracted,
       ...(productIntentData ?? {}),
     },
-    reasoning: classification.reasoning,
+    reasoning: effectiveClassification.reasoning,
   } : undefined;
 
   // Transacción atómica: insertar mensaje + actualizar clasificación del lead en una sola RPC.
@@ -262,25 +354,49 @@ async function persistAndRespond(
   // Enviar al cliente (llamada externa — fuera de la transacción)
   await provider.sendMessage(phone, response);
 
-  // Notificar al agente de ventas si el lead acaba de volverse hot.
-  // Se compara con la clasificación previa del lead (antes de este turno).
+  // Notificar al agente de ventas si:
+  // - El lead acaba de volverse hot (clasificación previa != hot), O
+  // - El lead ya era hot pero en este turno confirmó una compra/reserva (hasConversion).
   // fire-and-forget: el fallo de notificación nunca afecta al prospecto.
   if (
-    classification?.classification === "hot" &&
-    lead.classification !== "hot" &&
+    effectiveClassification?.classification === "hot" &&
+    (lead.classification !== "hot" || hasConversion) &&
     notificationPhone
   ) {
-    notifyHotLead(provider, notificationPhone, phone, lead.id);
+    notifyHotLead(provider, notificationPhone, phone, lead.id, hasConversion);
   }
 
   if (orderData) {
     await saveOrderData(lead.id, orderData);
-    await pauseLead(lead.id, "order_confirmed");
+    // pauseLeadWithHandoff sets handoff_mode='urgent' in DB.
+    // notifyHotLead (above) already handles the sales agent alert for confirmed orders.
+    await pauseLeadWithHandoff(lead.id, "order_confirmed");
     logger.info("Pedido confirmado — bot pausado, humano en control", {
       phone,
       leadId: lead.id,
       orderData,
     });
+  }
+
+  if (reservationData) {
+    // Reuse order_data JSONB field to persist reservation details
+    await saveOrderData(lead.id, reservationData as unknown as OrderData);
+    // pauseLeadWithHandoff sets handoff_mode='urgent' in DB.
+    // notifyHotLead (above) already handles the sales agent alert for confirmed reservations.
+    await pauseLeadWithHandoff(lead.id, "reservation_confirmed");
+    logger.info("Reserva confirmada — bot pausado, equipo toma control", {
+      phone,
+      leadId: lead.id,
+      reservationData,
+    });
+  }
+
+  if (handoffData) {
+    // Generic LLM-initiated handoff via HANDOFF_INICIO...HANDOFF_FIN block.
+    // Replaces the old hardcoded domicilio_exception and any future client-specific escalations.
+    const reason: BotPausedReason = handoffData.urgente ? "llm_handoff_urgent" : "llm_handoff";
+    logger.info("LLM solicitó handoff — bot pausado", { phone, leadId: lead.id, reason, motivo: handoffData.motivo });
+    await pauseAndMaybeNotify(lead.id, phone, reason, notificationPhone, notifyOnRequested, provider, handoffData.motivo);
   }
 }
 
@@ -292,7 +408,7 @@ async function persistAndRespond(
 // Usa un LLM separado con temperatura=0 sin rol conversacional.
 
 const CLASSIFY_MIN_MESSAGES = 3;  // mínimo de mensajes del usuario antes de la primera clasificación
-const CLASSIFY_EVERY_N = 3;        // clasificar cada N mensajes del usuario
+const CLASSIFY_EVERY_N = 2;        // clasificar cada N mensajes del usuario
 
 /**
  * Evalúa si corresponde clasificar en este turno y, si sí, llama al classifier.
@@ -304,7 +420,7 @@ const CLASSIFY_EVERY_N = 3;        // clasificar cada N mensajes del usuario
 async function maybeClassify(
   leadId: string,
   history: Message[],
-  config: ClientConfig,
+  historyLength: number,
   phone: string,
   currentClassification: Lead["classification"]
 ): Promise<Classification | null> {
@@ -315,27 +431,21 @@ async function maybeClassify(
   }
 
   // Historial insuficiente: con menos de N mensajes del usuario no hay contexto real.
-  const userMessageCount = history.filter((m) => m.role === "user").length;
+  const userMessageCount = historyLength;
   if (userMessageCount < CLASSIFY_MIN_MESSAGES) {
     logger.debug("Clasificación omitida: contexto insuficiente", { leadId, phone, userMessageCount });
     return null;
   }
 
-  // Frecuencia: clasificar solo en cada múltiplo de CLASSIFY_EVERY_N mensajes del usuario.
-  if (userMessageCount % CLASSIFY_EVERY_N !== 0) {
-    logger.debug("Clasificación pospuesta", { leadId, phone, userMessageCount, next: CLASSIFY_EVERY_N - (userMessageCount % CLASSIFY_EVERY_N) });
+  // Frecuencia: clasificar en el mensaje CLASSIFY_MIN_MESSAGES y luego cada CLASSIFY_EVERY_N mensajes.
+  // Esto asegura que la primera clasificación ocurra en el mensaje 3, 5, 7… (no 4, 6, 8…)
+  if ((userMessageCount - CLASSIFY_MIN_MESSAGES) % CLASSIFY_EVERY_N !== 0) {
+    logger.debug("Clasificación pospuesta", { leadId, phone, userMessageCount, next: CLASSIFY_EVERY_N - ((userMessageCount - CLASSIFY_MIN_MESSAGES) % CLASSIFY_EVERY_N) });
     return null;
   }
 
   try {
-    const result = await classifyConversation(history, config);
-    logger.info("Lead clasificado", {
-      phone,
-      leadId,
-      classification: result.classification,
-      score: result.score,
-      reasoning: result.reasoning,
-    });
+    const result = await classifyConversation(history);
     return result;
   } catch (e) {
     logger.error("Error en classifier — se omite sin afectar al cliente", { leadId, phone, error: String(e) });
@@ -390,8 +500,13 @@ export async function handleIncomingMessage(
     return { ok: true, skipped: true, reason: `unsupported media type: ${incomingMedia?.type}` };
   }
 
-  // 5. Debounce: agrupar mensajes rápidos del mismo lead
-  const batchMessages = await enqueueAndDebounce(phone, channelPhone, resolved.text);
+  // 4b. Enriquecer mensaje con contexto de cita (quoted message)
+  if (msg.quotedText) {
+    resolved.text = `${resolved.text}\n[El cliente responde al mensaje: "${msg.quotedText}"]`;
+  }
+
+  // 5. Debounce: agrupar mensajes rápidos del mismo lead (ventana configurable por cliente)
+  const batchMessages = await enqueueAndDebounce(phone, channelPhone, resolved.text, client.debounce_ms);
   if (batchMessages === null) {
     logger.debug("Mensaje agrupado en lote de otro mensaje más reciente", { phone });
     return { ok: true, skipped: true, reason: "debounced" };
@@ -402,14 +517,13 @@ export async function handleIncomingMessage(
   const clientConfig = await getClientConfig(client.id);
 
   // 6b. Sustituir placeholder [URL] del catálogo en el system prompt
-  // show_catalog_url es el que se muestra al lead; usa catalog_url como fallback
-  if (client.product_mode === "catalog") {
-    const showUrl = client.show_catalog_url ?? client.catalog_url;
+  if (clientConfig.capabilities.catalog) {
+    const showUrl = client.show_catalog_url;
     if (showUrl) {
       clientConfig.system_prompt = clientConfig.system_prompt.replaceAll("[URL]", showUrl);
       logger.debug("Placeholder [URL] sustituido en system prompt", { showUrl });
     } else {
-      logger.warn("Modo catálogo sin show_catalog_url ni catalog_url configurada", { clientId: client.id });
+      logger.warn("Modo catálogo sin show_catalog_url configurada", { clientId: client.id });
     }
   }
 
@@ -420,8 +534,11 @@ export async function handleIncomingMessage(
 
   const combinedMessage = batchMessages.join("\n");
 
-  // 8. Historial de conversación
-  const history = await getConversationHistory(lead.id, clientConfig.conversation_history_limit);
+  // 8. Historial de conversación (ambas queries son independientes → paralelas)
+  const [history, historyLength] = await Promise.all([
+    getConversationHistory(lead.id, clientConfig.conversation_history_limit),
+    getConversationHistoryLength(lead.id),
+  ]);
 
   // 9. Contexto de producto (catálogo o inventario)
   const productContext = await buildProductContext(
@@ -435,16 +552,17 @@ export async function handleIncomingMessage(
   //     Ambas operaciones leen el mismo `history` y son completamente independientes,
   //     por lo que corren concurrentemente sin latencia adicional para el usuario.
   //     El resultado de clasificación se escribe junto con el mensaje via RPC atómica.
-  const [classificationResult, { response, orderData }] = await Promise.all([
-    maybeClassify(lead.id, history, clientConfig, phone, lead.classification),
+  const [classificationResult, { response, orderData, reservationData, handoffData }] = await Promise.all([
+    maybeClassify(lead.id, history, historyLength, phone, lead.classification),
     generateResponse(history, clientConfig, productContext.inventorySection || undefined),
   ]);
 
   // 11. Persistir mensaje + clasificación en una sola RPC atómica y enviar al cliente.
   await persistAndRespond(
-    lead, phone, response, orderData, provider,
+    lead, phone, response, orderData, reservationData, handoffData, provider,
     classificationResult, productContext.productIntentData,
-    client.notification_phone
+    client.notification_phone,
+    client.notify_on_handoff_requested ?? false
   );
 
   return { ok: true };

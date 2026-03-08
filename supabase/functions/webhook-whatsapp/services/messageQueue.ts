@@ -22,18 +22,22 @@ const supabase = createClient(
 
 /** Milliseconds to wait before deciding this invocation is the leader.
  *  Set DEBOUNCE_MS env var (in ms) to override without redeploying. Default: 6000 */
-const DEBOUNCE_MS = Number(Deno.env.get("DEBOUNCE_MS") ?? 6000);
+const DEFAULT_DEBOUNCE_MS = Number(Deno.env.get("DEBOUNCE_MS") ?? 6000);
 
 /**
  * Enqueues a message, waits for the debounce window, then either:
  *   - Returns the ordered list of messages to process (this invocation is the leader).
  *   - Returns null (a newer invocation will handle the batch).
+ *
+ * @param debounceMs - Per-client override (ms). Falls back to DEBOUNCE_MS env var if omitted.
  */
 export async function enqueueAndDebounce(
   phone: string,
   channelPhone: string,
-  message: string
+  message: string,
+  debounceMs?: number | null
 ): Promise<string[] | null> {
+  const effectiveDebounceMs = debounceMs ?? DEFAULT_DEBOUNCE_MS;
   // 1. Insert this message into the queue
   const { data: queued, error: insertError } = await supabase
     .from("message_queue")
@@ -47,10 +51,10 @@ export async function enqueueAndDebounce(
   }
 
   const myCreatedAt: string = queued.created_at;
-  logger.debug("Mensaje encolado", { phone, id: queued.id, debounceMs: DEBOUNCE_MS });
+  logger.debug("Mensaje encolado", { phone, id: queued.id, debounceMs: effectiveDebounceMs });
 
   // 2. Wait for the debounce window
-  await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS));
+  await new Promise((resolve) => setTimeout(resolve, effectiveDebounceMs));
 
   // 3. Check whether a newer unprocessed message arrived for this phone
   const { data: newerRows, error: newerError } = await supabase
