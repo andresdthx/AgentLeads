@@ -1,6 +1,6 @@
 // LLM service - handles AI conversation and classification
 
-import type { LLMMessage, OrderData, Message, ClientConfig } from "../types/index.ts";
+import type { LLMMessage, OrderData, ReservationData, HandoffData, Message, ClientConfig, ClientFAQ } from "../types/index.ts";
 import { createLogger } from "../utils/logger.ts";
 
 const logger = createLogger("llm");
@@ -90,32 +90,109 @@ async function callLLM(
 
 /**
  * Parse order data from LLM response.
- * Detects a PEDIDO_INICIO ... PEDIDO_FIN block containing "pedido_confirmado": true.
+ * Primary: detects a PEDIDO_INICIO ... PEDIDO_FIN block containing "pedido_confirmado": true.
+ * Fallback: detects the purchase-redirect phrase when the LLM emitted the text
+ *           but forgot to include the structured JSON block (prompt non-compliance).
  */
-export function parseOrderData(response: string): OrderData | null {
+function parseOrderData(response: string): OrderData | null {
   const blockMatch = response.match(/PEDIDO_INICIO\s*([\s\S]*?)\s*PEDIDO_FIN/);
 
-  if (!blockMatch) return null;
-
-  try {
-    const parsed = JSON.parse(blockMatch[1].trim());
-    if (parsed?.pedido_confirmado === true && Array.isArray(parsed?.items)) {
-      return parsed as OrderData;
+  if (blockMatch) {
+    try {
+      const parsed = JSON.parse(blockMatch[1].trim());
+      if (parsed?.pedido_confirmado === true && Array.isArray(parsed?.items)) {
+        return parsed as OrderData;
+      }
+    } catch (e) {
+      logger.warn("Error parseando bloque de pedido", { error: e, raw: blockMatch[1] });
     }
-    return null;
-  } catch (e) {
-    logger.warn("Error parseando bloque de pedido", { error: e, raw: blockMatch[1] });
-    return null;
   }
+
+  // Fallback: the LLM wrote the compras-redirect message but skipped the JSON block.
+  // Treat as a confirmed order with unknown item details so the lead is still paused
+  // and classified as hot/100.
+  const REDIRECT_PHRASE = /compañero de compras|paso con.*compras/i;
+  if (REDIRECT_PHRASE.test(response)) {
+    logger.warn("LLM redirigió a compras sin bloque PEDIDO_INICIO — creando orderData sintético");
+    return {
+      pedido_confirmado: true,
+      ciudad_envio: null,
+      tipo_cliente: null,
+      items: [],
+    };
+  }
+
+  return null;
 }
 
 /**
- * Clean response by removing classification block and order JSON block
+ * Parse reservation data from LLM response (RESERVA_INICIO...RESERVA_FIN block).
+ * Used for service-based clients (e.g. Masajes S.A) that confirm bookings.
  */
-export function cleanResponse(response: string): string {
+function parseReservationData(response: string): ReservationData | null {
+  const blockMatch = response.match(/RESERVA_INICIO\s*([\s\S]*?)\s*RESERVA_FIN/);
+
+  if (blockMatch) {
+    try {
+      const parsed = JSON.parse(blockMatch[1].trim());
+      if (parsed?.reserva_confirmada === true) {
+        return parsed as ReservationData;
+      }
+    } catch (e) {
+      logger.warn("Error parseando bloque de reserva", { error: e, raw: blockMatch[1] });
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse handoff data from LLM response (HANDOFF_INICIO...HANDOFF_FIN block).
+ * Generic command the LLM can emit from any client prompt to trigger human takeover.
+ *
+ * Format:
+ *   HANDOFF_INICIO
+ *   motivo: <free text reason>
+ *   urgente: true|false
+ *   HANDOFF_FIN
+ *
+ * Returns null if no valid block is found.
+ */
+function parseHandoffData(response: string): HandoffData | null {
+  const blockMatch = response.match(/HANDOFF_INICIO\s*([\s\S]*?)\s*HANDOFF_FIN/);
+  if (!blockMatch) return null;
+
+  const block = blockMatch[1];
+  const motivoMatch = block.match(/motivo:\s*(.+)/);
+  const urgenteMatch = block.match(/urgente:\s*(true|false)/);
+
+  if (!motivoMatch) return null;
+
+  return {
+    motivo: motivoMatch[1].trim(),
+    urgente: urgenteMatch?.[1] === "true",
+  };
+}
+
+/**
+ * Build a FAQ prompt section to inject into the system prompt.
+ * Only called when config.faqs has entries.
+ */
+function buildFaqSection(faqs: ClientFAQ[]): string {
+  const entries = faqs
+    .map((f) => `**P:** ${f.question}\n**R:** ${f.answer}`)
+    .join("\n\n");
+  return `## Preguntas Frecuentes\n\n${entries}`;
+}
+
+/**
+ * Clean response by removing structured command blocks before sending to the customer.
+ */
+function cleanResponse(response: string): string {
   return response
-    .replace(/CLASIFICACION[\s\S]*?FIN/, "")
     .replace(/PEDIDO_INICIO[\s\S]*?PEDIDO_FIN/, "")
+    .replace(/RESERVA_INICIO[\s\S]*?RESERVA_FIN/, "")
+    .replace(/HANDOFF_INICIO[\s\S]*?HANDOFF_FIN/, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -128,19 +205,35 @@ export async function generateResponse(
   history: Message[],
   config: ClientConfig,
   inventorySection?: string
-): Promise<{ response: string; orderData: OrderData | null }> {
-  const systemPrompt = inventorySection
-    ? `${config.system_prompt}\n\n${inventorySection}`
-    : config.system_prompt;
+): Promise<{ response: string; orderData: OrderData | null; reservationData: ReservationData | null; handoffData: HandoffData | null }> {
+  // Build system prompt: base + FAQs (if any) + inventory/catalog context (if any).
+  // If the base prompt contains {{SERVICIOS_INYECTADOS}}, replace it in-place so the
+  // data lands inside the <ContextoNegocio> block where the prompt instructs the LLM to read it.
+  // Otherwise append at the end (backward-compatible with all other clients).
+  const PLACEHOLDER = "{{SERVICIOS_INYECTADOS}}";
+  let basePrompt = config.system_prompt;
+  if (inventorySection && basePrompt.includes(PLACEHOLDER)) {
+    basePrompt = basePrompt.replace(PLACEHOLDER, inventorySection);
+  }
+
+  const sections: string[] = [basePrompt];
+  if (config.faqs.length > 0)             sections.push(buildFaqSection(config.faqs));
+  if (inventorySection && !config.system_prompt.includes(PLACEHOLDER)) sections.push(inventorySection);
+  const systemPrompt = sections.join("\n\n");
 
   const messages = buildLLMMessages(history, systemPrompt);
   const llmResponse = await callLLM(messages, config);
 
   const orderData = parseOrderData(llmResponse);
+  const reservationData = orderData ? null : parseReservationData(llmResponse);
+  // Parse generic handoff command only when no order or reservation was confirmed.
+  const handoffData = !orderData && !reservationData ? parseHandoffData(llmResponse) : null;
   const cleanedResponse = cleanResponse(llmResponse);
 
   return {
     response: cleanedResponse,
     orderData,
+    reservationData,
+    handoffData,
   };
 }

@@ -9,7 +9,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { notifyHotLead } from "../../services/notification.ts";
+import { notifyHotLead, notifyHandoff } from "../../services/notification.ts";
 import {
   createMockWhatsAppProvider,
   createFailingWhatsAppProvider,
@@ -90,4 +90,56 @@ Deno.test("notifyHotLead - acepta cualquier implementación de WhatsAppProvider"
   await notifyHotLead(customProvider, "573001111111", "573002222222", "lead-xyz");
 
   assertEquals(called, true);
+});
+
+// ---------------------------------------------------------------------------
+// notifyHandoff
+// ---------------------------------------------------------------------------
+
+Deno.test("notifyHandoff - envía al teléfono de notificación (no al del lead)", async () => {
+  const { provider, getSentMessages } = createMockWhatsAppProvider();
+
+  await notifyHandoff(provider, "573001111111", "573002222222", "lead-abc", "requested");
+
+  const messages = getSentMessages();
+  assertEquals(messages.length, 1);
+  assertEquals(messages[0].to, "573001111111");
+});
+
+Deno.test("notifyHandoff - modo urgent incluye prefijo de acción requerida", async () => {
+  const { provider, getSentMessages } = createMockWhatsAppProvider();
+
+  await notifyHandoff(provider, "573001111111", "573002222222", "lead-abc", "urgent");
+
+  assertStringIncludes(getSentMessages()[0].text, "ACCIÓN REQUERIDA");
+});
+
+Deno.test("notifyHandoff - modo requested incluye prefijo de atención solicitada", async () => {
+  const { provider, getSentMessages } = createMockWhatsAppProvider();
+
+  await notifyHandoff(provider, "573001111111", "573002222222", "lead-abc", "requested");
+
+  assertStringIncludes(getSentMessages()[0].text, "Atención solicitada");
+});
+
+Deno.test("notifyHandoff - incluye lead ID en el mensaje", async () => {
+  const { provider, getSentMessages } = createMockWhatsAppProvider();
+
+  await notifyHandoff(provider, "573001111111", "573002222222", "lead-abc-123", "requested");
+
+  assertStringIncludes(getSentMessages()[0].text, "lead-abc-123");
+});
+
+Deno.test("notifyHandoff - incluye el motivo en el mensaje cuando se provee contexto", async () => {
+  const { provider, getSentMessages } = createMockWhatsAppProvider();
+
+  await notifyHandoff(provider, "573001111111", "573002222222", "lead-abc", "requested", "El cliente pregunta por descuento corporativo");
+
+  assertStringIncludes(getSentMessages()[0].text, "El cliente pregunta por descuento corporativo");
+});
+
+Deno.test("notifyHandoff - no lanza excepción cuando el provider falla", async () => {
+  const failingProvider = createFailingWhatsAppProvider();
+
+  await notifyHandoff(failingProvider, "573001111111", "573002222222", "lead-abc", "urgent");
 });

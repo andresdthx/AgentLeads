@@ -13,7 +13,7 @@
 //   "Repository Pattern + casos de uso explícitos".
 //
 // Lo que SÍ está cubierto en esta suite de tests:
-//   - services/llm.test.ts     → resolveApiKey, cleanResponse, parseOrderData
+//   - services/llm.test.ts     → resolveApiKey
 //   - services/intent.test.ts  → hasProductKeywords
 //   - services/notification.test.ts → notifyHotLead (con provider inyectado)
 //

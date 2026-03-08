@@ -14,7 +14,7 @@ const supabase = createClient(
 /**
  * Save a message to the database
  */
-export async function saveMessage(message: Message): Promise<void> {
+async function saveMessage(message: Message): Promise<void> {
   const { error } = await supabase.from("messages").insert(message);
 
   if (error) {
@@ -41,6 +41,21 @@ export async function getConversationHistory(
 }
 
 /**
+ * Get conversation history length for a lead
+ */
+export async function getConversationHistoryLength(
+  leadId: string
+): Promise<number> {
+  const { count } = await supabase
+    .from("messages")
+    .select("lead_id", { count: "exact", head: true })
+    .eq("lead_id", leadId)
+    .eq("role", "user")
+
+  return count || 0;
+}
+
+/**
  * Save incoming user message
  */
 export async function saveUserMessage(
@@ -50,20 +65,6 @@ export async function saveUserMessage(
   await saveMessage({
     lead_id: leadId,
     role: "user",
-    content,
-  });
-}
-
-/**
- * Save assistant response message
- */
-export async function saveAssistantMessage(
-  leadId: string,
-  content: string
-): Promise<void> {
-  await saveMessage({
-    lead_id: leadId,
-    role: "assistant",
     content,
   });
 }
@@ -101,15 +102,3 @@ export async function saveBotResponse(
   }
 }
 
-/**
- * Save a synthetic handoff note into conversation history.
- * Called by resumeLead so the LLM has context when it takes over again.
- */
-export async function saveHandoffNote(leadId: string): Promise<void> {
-  await saveMessage({
-    lead_id: leadId,
-    role: "assistant",
-    content:
-      "[NOTA INTERNA: El bot estuvo pausado mientras un asesor humano atendía esta conversación. Continúa de forma natural desde donde quedó el cliente.]",
-  });
-}
